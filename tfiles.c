@@ -1,10 +1,11 @@
 //compile: gcc tfiles.c $(pkg-config ncursesw --libs --cflags)
 #include <linux/limits.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
 #include <ncurses.h>
 #include <dirent.h>
 #include <unistd.h>
-#include <stdlib.h>
 #include <string.h>
 #include <locale.h>
 #include <sys/stat.h>
@@ -38,6 +39,9 @@ int first_visible_file_index;
 //If we showed previous_path, move highlight, and turn this to 0 so it won`t stuck
 //If we cd .. than this is again 1
 int show_previous_path = 1;
+
+struct stat dir_stat;
+time_t last_mtime = 0;
 
 
 
@@ -212,16 +216,29 @@ void clear_and_recreate(){
 }
 
 void update_values(){
+  getmaxyx(stdscr, stdscrY, stdscrX);
   last_visible_file_index = stdscrY- status_line_height + dont_draw_file_index - 1;
   getcwd(pwd,sizeof(pwd));
-  //wrong because it`s -1 at the start
   first_visible_file_index = dont_draw_file_index;
 }
 
+bool dir_changed(){
+  if (stat(pwd,&dir_stat) == 0){
+    if (dir_stat.st_mtime != last_mtime){
+      last_mtime = dir_stat.st_mtime;
+      return true;
+    }
+  }
 
-void handle_user_input(FilesArray fa,int user_input){
+  return false;
+}
+
+
+
+void handle_user_input(FilesArray *fa,int user_input){
   //for detecting key arrows
   switch(user_input){
+    //Navigating backwards
     case KEY_DOWN:
     case KEY_NAVDOWN:
        if (highlight+1 < dirlen){
@@ -232,23 +249,25 @@ void handle_user_input(FilesArray fa,int user_input){
       }
       break;
 
-
-    case KEY_NAVUP:
+    //Navigating upwards
     case KEY_UP:
+    case KEY_NAVUP:
       if (highlight > 0){
         highlight --;
-        
         if (highlight <first_visible_file_index){
           dont_draw_file_index --;
         }
       }
       break;
-
+    //Goes back to parent dir
     case KEY_LEFT:
     case KEY_NAV_PARENTDIR:
+    case KEY_NAV_PARENTDIR1:
       //if we are not in single-dashed path 
       if (strcmp(pwd,"/") != 0){
         chdir("..");
+        FilesArray_free(fa);
+        FilesArray_new(fa);
         show_previous_path = 1;
         strcpy(previous_path,pwd);
         highlight = -1;
@@ -256,16 +275,19 @@ void handle_user_input(FilesArray fa,int user_input){
         clear_and_recreate();
       }
       break;
-
+    //selected file
     case KEY_RIGHT:
-    case KEY_NAV_CHILDDIR:
-      char *filetype = fa.filetypes[highlight];
-      char *filename = fa.filenames[highlight];
+    case KEY_SELECT_FILE:
+    case KEY_SELECT_FILE1:
+      char *filetype = fa->filetypes[highlight];
+      char *filename = fa->filenames[highlight];
       
 
       //if current item(file) is a directory, than chdir
       if (strcmp(filetype,"D")==0){
         chdir(filename);
+        FilesArray_free(fa);
+        FilesArray_new(fa);
         highlight = 0;
         dont_draw_file_index = -1;
         clear_and_recreate();
@@ -274,12 +296,15 @@ void handle_user_input(FilesArray fa,int user_input){
 
 
 
-    
-    
-
-
     case KEY_RESIZE:
+      update_values();
+    
+      if (highlight > last_visible_file_index){
+        highlight = last_visible_file_index;
+      }
+
       clear_and_recreate();
+
       break;
     default:
       break;
@@ -368,6 +393,7 @@ int main(int argc,char **argv){
 
   FilesArray filesArray;
 
+  FilesArray_new(&filesArray);
 
 
 
@@ -375,7 +401,10 @@ int main(int argc,char **argv){
 
   // Main loop 
   while (user_input != 'q'){
-    FilesArray_new(&filesArray);
+    if (dir_changed()){
+      FilesArray_free(&filesArray);
+      FilesArray_new(&filesArray);
+    }
     //getting X,Y to draw files correctly
     getmaxyx(stdscr, stdscrY, stdscrX);
     update_values();
@@ -383,11 +412,8 @@ int main(int argc,char **argv){
     draw_status_line();
 
     user_input = getch();
-    //Getting new X,Y if user resized window
-    getmaxyx(stdscr, stdscrY, stdscrX);
-    handle_user_input(filesArray,user_input);
+    handle_user_input(&filesArray,user_input);
     refresh();
-    FilesArray_free(&filesArray);
 
   }
 
