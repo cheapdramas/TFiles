@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <ncurses.h>
 #include <dirent.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <locale.h>
@@ -16,15 +17,27 @@
 
 //global scope variables
 int dirlen = 0;
-int screenX;
-int screenY;
+int stdscrY;
+int stdscrX;
 int highlight;
-char *pwd;
+char pwd[PATH_MAX];
 DIR *dirp;
+
+WINDOW *status_line;
+int status_line_height = 3;
+
+//Minus one because we want to display all of the files at the start
+int dont_draw_file_index = -1; 
+int last_visible_file_index;
+int first_visible_file_index;
+
+
+
 
 
 void init_ncurses(){
   initscr();
+  getmaxyx(stdscr, stdscrY, stdscrX);
   curs_set(0);
   noecho();
   keypad(stdscr, true);
@@ -40,18 +53,27 @@ void opendir_wrap(char *path){
     exit(1);
   }
 }
+void status_line_newwin(){
+  status_line = newwin(3,stdscrX-1,stdscrY - 3,0);
+}
 
 void init(int argc,char **argv){
   opendir_wrap(".");
   //if path was specified
   if (argc == 2){
     opendir_wrap(argv[1]);  
+    chdir(argv[1]);
   }
   if (argc > 2){
     endwin();
     printf("%s\n","Maximum amount of arguments: 2");
     exit(1);
   }
+  //initializing an status_line
+  status_line_newwin(); 
+
+
+
 }
 
 typedef struct {
@@ -117,6 +139,9 @@ void FilesArray_fill(DIR * dir,FilesArray *fa){
         case DT_DIR:
           filetype = "D";
           break;
+        case DT_LNK:
+          filetype = "D";
+          break;
         default:
           filetype="F";
           break;
@@ -154,32 +179,44 @@ void sort_files(FilesArray *fa){
   }
 }
 
+void clear_and_recreate(){
+  clear();
+  werase(status_line);
+  status_line_newwin();
+}
 
-
+void update_values(){
+  last_visible_file_index = stdscrY- status_line_height + dont_draw_file_index - 1;
+  first_visible_file_index = dont_draw_file_index;
+}
 
 
 void handle_user_input(int user_input){
   //for detecting key arrows
   switch(user_input){
     case KEY_DOWN:
-      if (highlight+1 < dirlen){
-        highlight ++;
-      }
-      break;
     case KEY_NAVDOWN:
-      if (highlight+1 < dirlen){
+       if (highlight+1 < dirlen){
         highlight ++;
+        if (highlight > last_visible_file_index){
+          dont_draw_file_index ++;
+        }
       }
       break;
+
+
     case KEY_NAVUP:
-      if (highlight > 0){
-        highlight --;
-      }
-      break;
     case KEY_UP:
       if (highlight > 0){
         highlight --;
+        
+        if (highlight <first_visible_file_index){
+          dont_draw_file_index --;
+        }
       }
+      break;
+    case KEY_RESIZE:
+      clear_and_recreate();
       break;
     default:
       break;
@@ -189,16 +226,29 @@ void handle_user_input(int user_input){
 
 void draw_files(FilesArray filesArray){
   for (int i = 0;i<dirlen;i++){
-    if (i == highlight){
-      attron(A_REVERSE);
+    //if file is visible
+    if (i <= last_visible_file_index){
+
+      if (i == highlight){
+        attron(A_REVERSE);
+      }
+      if (strcmp(filesArray.filetypes[i],"D") == 0){
+        attron(COLOR_PAIR(1));
+      }
+      mvprintw(i + (-1 * dont_draw_file_index),0," %s\n",filesArray.filenames[i]);
+      attroff(A_REVERSE);
+      attroff(COLOR_PAIR(1));
     }
-    if (strcmp(filesArray.filetypes[i],"D") == 0){
-      attron(COLOR_PAIR(1));
-    }
-    mvprintw(i,0," %s\n",filesArray.filenames[i]);
-    attroff(A_REVERSE);
-    attroff(COLOR_PAIR(1));
   }
+}
+
+void draw_status_line(){
+  getcwd(pwd,sizeof(pwd)); 
+  refresh();
+  mvprintw(stdscrY-2,1,"%s",pwd);
+
+  box(status_line,0,0);
+  wrefresh(status_line);
 }
 
 
@@ -239,6 +289,8 @@ void main_copy_start(){
 }
 
 
+
+
 int main(int argc,char **argv){
   //SETLOCALE out of init function, idk how to fix this
   setlocale(LC_CTYPE, "");
@@ -251,14 +303,20 @@ int main(int argc,char **argv){
   sort_files(&filesArray);  
 
 
-  
 
   int user_input;
 
   // Main loop 
   while (user_input != 'q'){
+    //getting X,Y to draw files correctly
+    getmaxyx(stdscr, stdscrY, stdscrX);
+    update_values();
     draw_files(filesArray);
+    draw_status_line();
+
     user_input = getch();
+    //Getting new X,Y if user resized window
+    getmaxyx(stdscr, stdscrY, stdscrX);
     handle_user_input(user_input);
     refresh();
   }
