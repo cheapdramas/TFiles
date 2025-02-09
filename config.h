@@ -2,10 +2,7 @@
 #define config 
 
 
-#define MAX_ARGC = 2
 
-
-#define FILE_OPENER "xdg-open"
 
 
 
@@ -15,8 +12,20 @@
 //Move backwards
 #define KEY_NAVDOWN 'j'
 
+#define KEY_NAV_PARENTDIR 'h'
+
+#define KEY_NAV_CHILDDIR 'l'
+
 //Delete file
 #define KEY_DELETE_FILE 'd'
+
+
+#define MAX_ARGC = 2
+
+
+#define FILE_OPENER "xdg-open"
+
+
 
 
 #endif

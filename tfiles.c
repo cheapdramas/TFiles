@@ -19,8 +19,12 @@ int dirlen = 0;
 int stdscrY;
 int stdscrX;
 int highlight;
+//Keeps track of the highlighted file in parent dir before we cd
+int highlight_parrent_dir;
+//present working directory (updates every iteration)
 char pwd[PATH_MAX];
-DIR *dirp;
+//previous path(updates only when..)
+char previous_path[PATH_MAX];
 
 WINDOW *status_line;
 int status_line_height = 3;
@@ -29,6 +33,11 @@ int status_line_height = 3;
 int dont_draw_file_index = -1; 
 int last_visible_file_index;
 int first_visible_file_index;
+
+//To prevent blocking highlight variable in loop, so it doesn`t get stuck only on previous_path and could go on
+//If we showed previous_path, move highlight, and turn this to 0 so it won`t stuck
+//If we cd .. than this is again 1
+int show_previous_path = 1;
 
 
 
@@ -44,9 +53,9 @@ void init_ncurses(){
   init_pair(1,COLOR_YELLOW,COLOR_BLACK);
 }
 
-void opendir_wrap(char *path){
-  dirp = opendir(path);
-  if (dirp == NULL){
+void opendir_wrap(DIR **dirp,char *path){
+  *dirp = opendir(path);
+  if (*dirp == NULL){
     endwin();
     perror("Unable to open this directory");
     exit(1);
@@ -57,10 +66,8 @@ void status_line_newwin(){
 }
 
 void init(int argc,char **argv){
-  opendir_wrap(".");
   //if path was specified
   if (argc == 2){
-    opendir_wrap(argv[1]);  
     chdir(argv[1]);
   }
   if (argc > 2){
@@ -85,6 +92,7 @@ void FilesArray_init(FilesArray *fa,int start_size){
   fa->filetypes = malloc(start_size * sizeof(char *));
   if (fa->filenames  == NULL || fa->filetypes == NULL){
     printf("%s\n","Couldn`t allocate memory!");
+    endwin();
     exit(1);
   }
 
@@ -105,6 +113,12 @@ void FilesArray_append(FilesArray *fa,char *filename, char * filetype){
   }
   fa->filenames[fa->last_used_index] = strdup(filename);
   fa->filetypes[fa->last_used_index] = strdup(filetype);
+  //if memory allocation for filename or filetype is failed
+  if (fa->filenames[fa->last_used_index] == NULL || fa->filetypes[fa->last_used_index] == NULL){
+    printf("%s\n","Memory allocation failed!");
+    endwin();
+    exit(1);
+  }
   fa->last_used_index += 1;
 }
 
@@ -117,15 +131,20 @@ void FilesArray_free(FilesArray *fa){
   free(fa->filenames);
   free(fa->filetypes);
   fa->last_used_index = 0;
+  fa->size = 1;
 }
 
 //fills FilesArray with files from given directory
-void FilesArray_fill(DIR * dir,FilesArray *fa){
+void FilesArray_fill(FilesArray *fa){
   dirlen = 0;
   struct dirent *entry;
   char * filetype;
   char *filename;
-  while ((entry = readdir(dir)) != NULL){
+  DIR *dirp;
+  opendir_wrap(&dirp,".");
+
+
+  while ((entry = readdir(dirp)) != NULL){
     //no . and .. dirs
     if (strcmp(entry->d_name,".") != 0 && strcmp(entry->d_name,"..")!= 0 ){
       switch(entry->d_type){
@@ -147,10 +166,13 @@ void FilesArray_fill(DIR * dir,FilesArray *fa){
       dirlen ++;
     }
   }
+  closedir(dirp);
 }
 
+
+
 //sort filename order by name O(n²)
-void sort_files(FilesArray *fa){
+void FilesArray_sort(FilesArray *fa){
   char ** filenames = fa->filenames;
   char ** filetypes = fa->filetypes;
 
@@ -175,6 +197,14 @@ void sort_files(FilesArray *fa){
   }
 }
 
+void FilesArray_new(FilesArray *filesArray){
+  FilesArray_init(filesArray,1);
+  FilesArray_fill(filesArray);
+  FilesArray_sort(filesArray);  
+}
+
+
+
 void clear_and_recreate(){
   clear();
   werase(status_line);
@@ -183,11 +213,13 @@ void clear_and_recreate(){
 
 void update_values(){
   last_visible_file_index = stdscrY- status_line_height + dont_draw_file_index - 1;
+  getcwd(pwd,sizeof(pwd));
+  //wrong because it`s -1 at the start
   first_visible_file_index = dont_draw_file_index;
 }
 
 
-void handle_user_input(int user_input){
+void handle_user_input(FilesArray fa,int user_input){
   //for detecting key arrows
   switch(user_input){
     case KEY_DOWN:
@@ -212,6 +244,39 @@ void handle_user_input(int user_input){
       }
       break;
 
+    case KEY_LEFT:
+    case KEY_NAV_PARENTDIR:
+      //if we are not in single-dashed path 
+      if (strcmp(pwd,"/") != 0){
+        chdir("..");
+        show_previous_path = 1;
+        strcpy(previous_path,pwd);
+        highlight = -1;
+        dont_draw_file_index = -1;
+        clear_and_recreate();
+      }
+      break;
+
+    case KEY_RIGHT:
+    case KEY_NAV_CHILDDIR:
+      char *filetype = fa.filetypes[highlight];
+      char *filename = fa.filenames[highlight];
+      
+
+      //if current item(file) is a directory, than chdir
+      if (strcmp(filetype,"D")==0){
+        chdir(filename);
+        highlight = 0;
+        dont_draw_file_index = -1;
+        clear_and_recreate();
+      }
+      break;
+
+
+
+    
+    
+
 
     case KEY_RESIZE:
       clear_and_recreate();
@@ -223,25 +288,70 @@ void handle_user_input(int user_input){
 
 
 void draw_files(FilesArray filesArray){
+  nodelay(stdscr, false);
+  char fullpath[PATH_MAX];
+  char *filename;
   for (int i = 0;i<dirlen;i++){
     //if file is visible
     if (i <= last_visible_file_index){
+      filename = filesArray.filenames[i];
+      //getting file full path
+      //if our path is single-dashed (/home,/lib,/usr)
+      if (strcmp(pwd,"/") == 0){
+        snprintf(fullpath,strlen(filename) + 2,"/%s",filename);
+      }
+      else{
+        snprintf(fullpath, strlen(pwd) + strlen(filename) + 2, "%s/%s", pwd,filename);
+      }
+      
 
+
+      //current file highlighting      
+      if (strcmp(previous_path,fullpath) == 0){
+        if (show_previous_path == 1){
+          attroff(A_REVERSE);
+          attron(A_REVERSE);
+          highlight = i;
+          show_previous_path = 0;
+        }
+      }
       if (i == highlight){
         attron(A_REVERSE);
-      }
+      }  
+    
+
       if (strcmp(filesArray.filetypes[i],"D") == 0){
         attron(COLOR_PAIR(1));
       }
       mvprintw(i + (-1 * dont_draw_file_index),0," %s\n",filesArray.filenames[i]);
+      // mvprintw(i + (-1 * dont_draw_file_index),0," %s\n",fullpath);
       attroff(A_REVERSE);
       attroff(COLOR_PAIR(1));
+    }
+    //if file is beyond the screen
+    else{
+      filename = filesArray.filenames[i];
+      //getting file full path
+      snprintf(fullpath, strlen(pwd) + strlen(filename) + 2, "%s/%s", pwd,filename);
+      //if we found previous_path that is beyond the screen
+      if (strcmp(previous_path,fullpath) == 0){
+        //do not let highlight get stuck on previous_path
+        if (show_previous_path == 1){
+          attroff(A_REVERSE);
+          dont_draw_file_index = i - last_visible_file_index + 1;
+          highlight = i;
+          show_previous_path = 0;
+          nodelay(stdscr,true);
+          clear();
+
+        }
+      }
+
     }
   }
 }
 
 void draw_status_line(){
-  getcwd(pwd,sizeof(pwd)); 
   refresh();
   mvprintw(stdscrY-(status_line_height-1),1,"%s",pwd);
 
@@ -257,9 +367,7 @@ int main(int argc,char **argv){
   init(argc,argv);
 
   FilesArray filesArray;
-  FilesArray_init(&filesArray,1);
-  FilesArray_fill(dirp,&filesArray);
-  sort_files(&filesArray);  
+
 
 
 
@@ -267,6 +375,7 @@ int main(int argc,char **argv){
 
   // Main loop 
   while (user_input != 'q'){
+    FilesArray_new(&filesArray);
     //getting X,Y to draw files correctly
     getmaxyx(stdscr, stdscrY, stdscrX);
     update_values();
@@ -276,8 +385,10 @@ int main(int argc,char **argv){
     user_input = getch();
     //Getting new X,Y if user resized window
     getmaxyx(stdscr, stdscrY, stdscrX);
-    handle_user_input(user_input);
+    handle_user_input(filesArray,user_input);
     refresh();
+    FilesArray_free(&filesArray);
+
   }
 
 
