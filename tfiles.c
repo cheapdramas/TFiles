@@ -12,7 +12,6 @@
 #include "config.h" 
 
 
-#define COLOR_PINK 8
 
 
 //global scope variables
@@ -215,6 +214,8 @@ void handle_user_input(int user_input){
         }
       }
       break;
+
+
     case KEY_RESIZE:
       clear_and_recreate();
       break;
@@ -252,45 +253,6 @@ void draw_status_line(){
 }
 
 
-void main_copy_start(){
-  /*
-  setlocale(LC_CTYPE, "");
-  init_ncurses();
-  init(argc,argv);
-
-  FilesArray filesArray;
-  FilesArray_init(&filesArray,1);
-  FilesArray_fill(dirp,&filesArray);
-  sort_files(&filesArray);  
-
-
-
-  
-
-  int user_input;
-
-  // Main loop 
-  while (user_input != 'q'){
-    draw_files(filesArray);
-    user_input = getch();
-    handle_user_input(user_input);
-    refresh();
-  }
-
-
-  
-
-
-  endwin();
-  return 0;
-  
-
-  */
-}
-
-
-
-
 int main(int argc,char **argv){
   //SETLOCALE out of init function, idk how to fix this
   setlocale(LC_CTYPE, "");
@@ -320,9 +282,6 @@ int main(int argc,char **argv){
     handle_user_input(user_input);
     refresh();
   }
-
-
-  
 
 
   endwin();
