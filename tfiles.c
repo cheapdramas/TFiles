@@ -53,7 +53,7 @@ void opendir_wrap(char *path){
   }
 }
 void status_line_newwin(){
-  status_line = newwin(3,stdscrX-1,stdscrY - 3,0);
+  status_line = newwin(status_line_height,stdscrX-1,stdscrY - status_line_height,0);
 }
 
 void init(int argc,char **argv){
@@ -70,9 +70,6 @@ void init(int argc,char **argv){
   }
   //initializing an status_line
   status_line_newwin(); 
-
-
-
 }
 
 typedef struct {
@@ -152,7 +149,7 @@ void FilesArray_fill(DIR * dir,FilesArray *fa){
   }
 }
 
-//sort filename order by name
+//sort filename order by name O(n²)
 void sort_files(FilesArray *fa){
   char ** filenames = fa->filenames;
   char ** filetypes = fa->filetypes;
@@ -246,7 +243,7 @@ void draw_files(FilesArray filesArray){
 void draw_status_line(){
   getcwd(pwd,sizeof(pwd)); 
   refresh();
-  mvprintw(stdscrY-2,1,"%s",pwd);
+  mvprintw(stdscrY-(status_line_height-1),1,"%s",pwd);
 
   box(status_line,0,0);
   wrefresh(status_line);
