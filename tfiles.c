@@ -21,6 +21,7 @@ int stdscrY;
 int stdscrX;
 int highlight;
 //Keeps track of the highlighted file in parent dir before we cd
+//Keeps pwd before cd ..
 int highlight_parrent_dir;
 //present working directory (updates every iteration)
 char pwd[PATH_MAX];
@@ -40,7 +41,6 @@ int first_visible_file_index;
 //If we cd .. than this is again 1
 int show_previous_path = 1;
 
-struct stat dir_stat;
 time_t last_mtime = 0;
 
 
@@ -80,12 +80,12 @@ void init(int argc,char **argv){
     exit(1);
   }
   //initializing an status_line
+  getcwd(pwd,sizeof(pwd));
   status_line_newwin(); 
 }
 
 typedef struct {
   char ** filenames;
-  char ** filetypes;
   size_t size;
   size_t last_used_index;
 }FilesArray;
@@ -93,8 +93,7 @@ typedef struct {
 
 void FilesArray_init(FilesArray *fa,int start_size){
   fa->filenames = malloc(start_size * sizeof(char *));
-  fa->filetypes = malloc(start_size * sizeof(char *));
-  if (fa->filenames  == NULL || fa->filetypes == NULL){
+  if (fa->filenames  == NULL){
     printf("%s\n","Couldn`t allocate memory!");
     endwin();
     exit(1);
@@ -104,21 +103,19 @@ void FilesArray_init(FilesArray *fa,int start_size){
   fa->size = start_size;
 }
 
-void FilesArray_append(FilesArray *fa,char *filename, char * filetype){
+void FilesArray_append(FilesArray *fa,char *filename){
   if (fa->last_used_index >= fa->size){
     fa->size*=2;
     fa->filenames = realloc(fa->filenames,fa->size* sizeof(char *));
-    fa->filetypes = realloc(fa->filetypes,fa->size*sizeof(char *));
-    if (fa->filenames  == NULL || fa->filetypes == NULL){
+    if (fa->filenames  == NULL){
       printf("%s\n","Couldn`t reallocate memory!");
       endwin();
       exit(1);
     }
   }
   fa->filenames[fa->last_used_index] = strdup(filename);
-  fa->filetypes[fa->last_used_index] = strdup(filetype);
   //if memory allocation for filename or filetype is failed
-  if (fa->filenames[fa->last_used_index] == NULL || fa->filetypes[fa->last_used_index] == NULL){
+  if (fa->filenames[fa->last_used_index] == NULL){
     printf("%s\n","Memory allocation failed!");
     endwin();
     exit(1);
@@ -130,10 +127,8 @@ void FilesArray_free(FilesArray *fa){
   //go through array elements and free every allocated memmory we did
   for (size_t i = 0;i<fa->last_used_index;i++){
     free(fa->filenames[i]);
-    free(fa->filetypes[i]);
   }
   free(fa->filenames);
-  free(fa->filetypes);
   fa->last_used_index = 0;
   fa->size = 1;
 }
@@ -142,7 +137,6 @@ void FilesArray_free(FilesArray *fa){
 void FilesArray_fill(FilesArray *fa){
   dirlen = 0;
   struct dirent *entry;
-  char * filetype;
   char *filename;
   DIR *dirp;
   opendir_wrap(&dirp,".");
@@ -151,55 +145,24 @@ void FilesArray_fill(FilesArray *fa){
   while ((entry = readdir(dirp)) != NULL){
     //no . and .. dirs
     if (strcmp(entry->d_name,".") != 0 && strcmp(entry->d_name,"..")!= 0 ){
-      switch(entry->d_type){
-        case DT_REG:
-          filetype = "F";
-          break;
-        case DT_DIR:
-          filetype = "D";
-          break;
-        case DT_LNK:
-          filetype = "D";
-          break;
-        default:
-          filetype="F";
-          break;
-      }
       filename = entry->d_name;
-      FilesArray_append(fa,filename,filetype);
+      FilesArray_append(fa,filename);
       dirlen ++;
     }
   }
   closedir(dirp);
 }
 
+//for qsort
+int compare_filenames(const void *a, const void *b) {
+  return strcmp(*(char **)a, *(char **)b);
+}
 
+void FilesArray_sort(FilesArray *fa) {
+  qsort(fa->filenames, dirlen, sizeof(char *), compare_filenames);
+}
 
 //sort filename order by name O(n²)
-void FilesArray_sort(FilesArray *fa){
-  char ** filenames = fa->filenames;
-  char ** filetypes = fa->filetypes;
-
-  //main algorithm
-  for (int i=0;i<dirlen;i++){
-    int j_min = i;
-    for (int j = i + 1;j<dirlen;j++){
-      if (strcmp(filenames[j],filenames[j_min]) < 0){
-        j_min = j;
-      }
-    }
-    if (i!=j_min){
-      char *temp_filename = filenames[i];
-      filenames[i] = filenames[j_min];
-      filenames[j_min] = temp_filename;
-     
-      //reindexing filetypes
-      char *temp_filetype = filetypes[i];
-      filetypes[i] = filetypes[j_min];
-      filetypes[j_min] = temp_filetype;
-    }
-  }
-}
 
 void FilesArray_new(FilesArray *filesArray){
   FilesArray_init(filesArray,1);
@@ -222,18 +185,23 @@ void update_values(){
   first_visible_file_index = dont_draw_file_index;
 }
 
-bool dir_changed(){
+bool dir_have_changes(){
+  struct stat dir_stat;
   if (stat(pwd,&dir_stat) == 0){
     if (dir_stat.st_mtime != last_mtime){
       last_mtime = dir_stat.st_mtime;
       return true;
     }
   }
-
   return false;
 }
 
-
+bool is_dir(char *filename){
+  struct stat file_stat;
+  if (stat(filename,&file_stat) == 0){
+    return S_ISDIR(file_stat.st_mode);
+  }
+}
 
 void handle_user_input(FilesArray *fa,int user_input){
   //for detecting key arrows
@@ -279,12 +247,11 @@ void handle_user_input(FilesArray *fa,int user_input){
     case KEY_RIGHT:
     case KEY_SELECT_FILE:
     case KEY_SELECT_FILE1:
-      char *filetype = fa->filetypes[highlight];
       char *filename = fa->filenames[highlight];
       
 
       //if current item(file) is a directory, than chdir
-      if (strcmp(filetype,"D")==0){
+      if (is_dir(filename)){
         chdir(filename);
         FilesArray_free(fa);
         FilesArray_new(fa);
@@ -345,7 +312,7 @@ void draw_files(FilesArray filesArray){
       }  
     
 
-      if (strcmp(filesArray.filetypes[i],"D") == 0){
+      if (is_dir(filename)){
         attron(COLOR_PAIR(1));
       }
       mvprintw(i + (-1 * dont_draw_file_index),0," %s\n",filesArray.filenames[i]);
@@ -392,7 +359,6 @@ int main(int argc,char **argv){
   init(argc,argv);
 
   FilesArray filesArray;
-
   FilesArray_new(&filesArray);
 
 
@@ -401,7 +367,7 @@ int main(int argc,char **argv){
 
   // Main loop 
   while (user_input != 'q'){
-    if (dir_changed()){
+    if (dir_have_changes()){
       FilesArray_free(&filesArray);
       FilesArray_new(&filesArray);
     }
@@ -414,7 +380,6 @@ int main(int argc,char **argv){
     user_input = getch();
     handle_user_input(&filesArray,user_input);
     refresh();
-
   }
 
 
