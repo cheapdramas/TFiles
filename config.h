@@ -13,9 +13,10 @@
 #define KEY_NAVDOWN 'j'
 
 #define KEY_NAV_PARENTDIR 'h'
+#define KEY_NAV_PARENTDIR1 'b'
 
-#define KEY_NAV_CHILDDIR 'l'
-
+#define KEY_SELECT_FILE 'l'
+#define KEY_SELECT_FILE1 '\n'
 //Delete file
 #define KEY_DELETE_FILE 'd'
 

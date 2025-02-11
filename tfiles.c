@@ -44,6 +44,7 @@ int show_previous_path = 1;
 time_t last_mtime = 0;
 
 
+char *editor = NULL;
 
 
 
@@ -70,16 +71,52 @@ void status_line_newwin(){
 }
 
 void init(int argc,char **argv){
-  //if path was specified
-  if (argc == 2){
-    chdir(argv[1]);
+  //argv[0] = always program name
+  //argv[1] = must be a start path
+
+  if (argc >=  2){
+
+    //start iterating through arguments 
+    for (int i = 1;i < argc;i++){
+      char *argument = argv[i];
+
+      //if we found "-path" argument
+      if (strcmp(argument,"-path") == 0){
+        if (i + 1 <= argc - 1){
+          //Changing directory
+          if (chdir(argv[i+1]) == -1){
+            endwin();
+            perror("Bad argument(path)! Make sure that first argument is a valid path\n");
+            exit(1);
+          }
+        }
+      }
+
+      
+      //if we found "-editor" argument
+      if (strcmp(argument,"-editor") == 0){
+        //We make sure that we have our next argument as editor name
+        //i + 1 as next index from editor
+        //argc - 1 as we comparing indexes(start from 0)
+        if (i + 1<= argc - 1){
+          editor = argv[i+1];
+        }
+        else
+        {
+          endwin();
+          printf("Bad argument(editor)! Make sure to provide editor name after '-editor' argument \n");
+          exit(1);
+        }
+
+      }
+
+
+      
+
+
+    }
   }
-  if (argc > 2){
-    endwin();
-    printf("%s\n","Maximum amount of arguments: 2");
-    exit(1);
-  }
-  //initializing an status_line
+  // initializing an status_line
   getcwd(pwd,sizeof(pwd));
   status_line_newwin(); 
 }
@@ -185,6 +222,8 @@ void update_values(){
   first_visible_file_index = dont_draw_file_index;
 }
 
+//We can use this function to check for changes in dir
+//Or we can use this function to update last_mtime
 bool dir_have_changes(){
   struct stat dir_stat;
   if (stat(pwd,&dir_stat) == 0){
@@ -196,12 +235,89 @@ bool dir_have_changes(){
   return false;
 }
 
-bool is_dir(char *filename){
-  struct stat file_stat;
-  if (stat(filename,&file_stat) == 0){
-    return S_ISDIR(file_stat.st_mode);
+//Just for clarity
+void update_last_mtime(){
+  struct stat dir_stat;
+  if (stat(pwd,&dir_stat) == 0){
+    if (dir_stat.st_mtime != last_mtime){
+      last_mtime = dir_stat.st_mtime;
+    }
   }
 }
+
+
+
+bool is_dir(char *filename){
+  struct stat file_stat;
+  if (stat(filename,&file_stat) != 0){
+    return false;
+  }
+  return S_ISDIR(file_stat.st_mode);
+}
+
+//If <filename> type is a text like, open it in current terminal session (vim or whatever)
+//Else: let the xdg-open command work
+void open_file(char *filename){
+  //here we will keep the result that 'file' command gave us
+  //I do not know why 64 and why = {0};
+  char buf[64] = {0};
+ 
+  //here we will keep the command
+  //I do not know why 64 and why = {0};
+  char cmd[64]= {0};
+
+  FILE *stream;
+  
+  //creating cmd string
+  snprintf(cmd,64,"%s %s","file",filename);
+
+
+
+
+  //Here we call 'file' to filename
+  //At one we will check that call is successfull
+  if ( (stream = popen(cmd,"r")) ){
+    if ( fgets(buf,64,stream) ){
+
+        pclose(stream);
+
+      if (strstr(buf,"text") || strstr(buf,"empty")){
+        
+        if (editor != NULL) {
+          char syscall[strlen(editor) + strlen(filename) + 3];
+          snprintf(syscall,strlen(editor) + strlen(filename) + 3,"%s %s", editor,filename);
+          def_prog_mode();
+          endwin();
+          system(syscall);
+         
+        }
+        else
+        {
+          char syscall[strlen(filename) + 5];
+          snprintf(syscall,strlen(filename) + 5,"%s %s","vim",filename);
+          def_prog_mode();
+          endwin();
+          system(syscall); 
+        }
+      }
+      //xdg-open || open  
+      else
+      {
+        char syscall[strlen(filename) + 8];
+        snprintf(syscall,strlen(filename) + 8,"open \"%s\"",filename);
+        system(syscall);
+        clear();
+        refresh();
+
+
+        
+
+
+      }
+    }
+  }
+}
+
 
 void handle_user_input(FilesArray *fa,int user_input){
   //for detecting key arrows
@@ -238,8 +354,16 @@ void handle_user_input(FilesArray *fa,int user_input){
         FilesArray_new(fa);
         show_previous_path = 1;
         strcpy(previous_path,pwd);
+        //-1 As non existing index
+        //If 0: we would leave the mark of 'selected' on the first file, is file is visible
+        //But as we go to parent dir, we want to our highlight point to previous_path
         highlight = -1;
+        //-1 As non existing index
+        //(This would change when we find previous_path in draw_files)
         dont_draw_file_index = -1;
+
+        update_last_mtime();
+
         clear_and_recreate();
       }
       break;
@@ -247,25 +371,40 @@ void handle_user_input(FilesArray *fa,int user_input){
     case KEY_RIGHT:
     case KEY_SELECT_FILE:
     case KEY_SELECT_FILE1:
-      char *filename = fa->filenames[highlight];
-      
+      if (dirlen >= 1){
+        char *filename = fa->filenames[highlight];
+        
 
-      //if current item(file) is a directory, than chdir
-      if (is_dir(filename)){
-        chdir(filename);
-        FilesArray_free(fa);
-        FilesArray_new(fa);
-        highlight = 0;
-        dont_draw_file_index = -1;
-        clear_and_recreate();
+        //if current item(file) is a directory, than chdir
+        if (is_dir(filename)){
+          chdir(filename);
+          FilesArray_free(fa);
+          FilesArray_new(fa);
+          //reset highlight
+          highlight = 0;
+          //reset dont_draw_file_index
+          dont_draw_file_index = -1;
+          //just to update last_mtime for new directory
+          //to not compare with old last_mtime for previous directory
+          update_last_mtime();
+
+          clear_and_recreate();
+        }
+        //FILE
+        else{
+          open_file(filename);
+        }
+
+
       }
       break;
 
 
 
     case KEY_RESIZE:
+      //updating values (for new screen size)
       update_values();
-    
+      
       if (highlight > last_visible_file_index){
         highlight = last_visible_file_index;
       }
@@ -290,6 +429,7 @@ void draw_files(FilesArray filesArray){
       //getting file full path
       //if our path is single-dashed (/home,/lib,/usr)
       if (strcmp(pwd,"/") == 0){
+        //getting full path, length of filename + 2 ('/0' and '/')
         snprintf(fullpath,strlen(filename) + 2,"/%s",filename);
       }
       else{
@@ -300,10 +440,13 @@ void draw_files(FilesArray filesArray){
 
       //current file highlighting      
       if (strcmp(previous_path,fullpath) == 0){
+        //If we just cd ..
         if (show_previous_path == 1){
-          attroff(A_REVERSE);
+          attroff(A_REVERSE); //CHECK may be useless here
           attron(A_REVERSE);
+          //setting highlight to found previous_path
           highlight = i;
+          //setting this to 0 so we won`t get highlight stuck on previous_path
           show_previous_path = 0;
         }
       }
@@ -315,27 +458,27 @@ void draw_files(FilesArray filesArray){
       if (is_dir(filename)){
         attron(COLOR_PAIR(1));
       }
+      //Printing the filename (-1 * dont_draw_file_index creates the scroll effect)
       mvprintw(i + (-1 * dont_draw_file_index),0," %s\n",filesArray.filenames[i]);
-      // mvprintw(i + (-1 * dont_draw_file_index),0," %s\n",fullpath);
       attroff(A_REVERSE);
       attroff(COLOR_PAIR(1));
     }
     //if file is beyond the screen
     else{
       filename = filesArray.filenames[i];
-      //getting file full path
       snprintf(fullpath, strlen(pwd) + strlen(filename) + 2, "%s/%s", pwd,filename);
       //if we found previous_path that is beyond the screen
       if (strcmp(previous_path,fullpath) == 0){
         //do not let highlight get stuck on previous_path
         if (show_previous_path == 1){
-          attroff(A_REVERSE);
+          attroff(A_REVERSE); //just in case (may be useless)
+          // setting dont_draw_file_index to new value, so we can see the previous_path that were beyond the screen
           dont_draw_file_index = i - last_visible_file_index + 1;
           highlight = i;
           show_previous_path = 0;
+          //To ingore getch() in current iteration, so we can straight jump into new draw_files() function with new dont_draw_file_index
           nodelay(stdscr,true);
-          clear();
-
+          clear(); //just in case (works)
         }
       }
 
@@ -346,7 +489,6 @@ void draw_files(FilesArray filesArray){
 void draw_status_line(){
   refresh();
   mvprintw(stdscrY-(status_line_height-1),1,"%s",pwd);
-
   box(status_line,0,0);
   wrefresh(status_line);
 }
@@ -370,6 +512,15 @@ int main(int argc,char **argv){
     if (dir_have_changes()){
       FilesArray_free(&filesArray);
       FilesArray_new(&filesArray);
+      //if highlighted was the last file, that got deleted
+      //highlight is on 1 bigger than dirlen, as it`s start from 0 (==)
+      if (highlight == dirlen){
+        mvprintw(0,0,"%d   %d", highlight,dirlen);
+        //put highlight on the last file in directory
+        highlight = dirlen - 1;
+      }
+      //clear so we can draw new changes in directory
+      clear();
     }
     //getting X,Y to draw files correctly
     getmaxyx(stdscr, stdscrY, stdscrX);
