@@ -1,5 +1,7 @@
 //compile: gcc tfiles.c $(pkg-config ncursesw --libs --cflags)
+#include <bits/types/sigset_t.h>
 #include <linux/limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -11,8 +13,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include "config.h" 
-
-
+#include <sys/wait.h>
+#include <fcntl.h>
 
 
 //global scope variables
@@ -73,6 +75,10 @@ void status_line_newwin(){
 void init(int argc,char **argv){
   //argv[0] = always program name
   //argv[1] = must be a start path
+  
+  if ((editor = getenv("EDITOR")) == NULL){
+    editor = "vim";
+  }
 
   if (argc >=  2){
 
@@ -107,13 +113,7 @@ void init(int argc,char **argv){
           printf("Bad argument(editor)! Make sure to provide editor name after '-editor' argument \n");
           exit(1);
         }
-
       }
-
-
-      
-
-
     }
   }
   // initializing an status_line
@@ -255,72 +255,75 @@ bool is_dir(char *filename){
   return S_ISDIR(file_stat.st_mode);
 }
 
-//If <filename> type is a text like, open it in current terminal session (vim or whatever)
-//Else: let the xdg-open command work
-void open_file(char *filename){
-  //here we will keep the result that 'file' command gave us
-  //I do not know why 64 and why = {0};
-  char buf[64] = {0};
- 
-  //here we will keep the command
-  //I do not know why 64 and why = {0};
-  char cmd[64]= {0};
-
+//calls 'file <filename>' to get file info and writes it to filecmdresult
+void cmdFile(char *filename,char filecmdresult[64]){
+  int size_cmd = strlen(filename) + 6;
+  char cmd[size_cmd];
+  snprintf(cmd,size_cmd,"file %s",filename);
   FILE *stream;
-  
-  //creating cmd string
-  snprintf(cmd,64,"%s %s","file",filename);
-
-
-
-
-  //Here we call 'file' to filename
-  //At one we will check that call is successfull
   if ( (stream = popen(cmd,"r")) ){
-    if ( fgets(buf,64,stream) ){
-
-        pclose(stream);
-
-      if (strstr(buf,"text") || strstr(buf,"empty")){
-        
-        if (editor != NULL) {
-          char syscall[strlen(editor) + strlen(filename) + 3];
-          snprintf(syscall,strlen(editor) + strlen(filename) + 3,"%s %s", editor,filename);
-          def_prog_mode();
-          endwin();
-          system(syscall);
-         
-        }
-        else
-        {
-          char syscall[strlen(filename) + 5];
-          snprintf(syscall,strlen(filename) + 5,"%s %s","vim",filename);
-          def_prog_mode();
-          endwin();
-          system(syscall); 
-        }
-      }
-      //xdg-open || open  
-      else
-      {
-        char syscall[strlen(filename) + 8];
-        snprintf(syscall,strlen(filename) + 8,"open \"%s\"",filename);
-        system(syscall);
-        clear();
-        refresh();
-
-
-        
-
-
-      }
-    }
+    fgets(filecmdresult,64,stream);
   }
 }
 
 
+
+
+
+
+// /If <filename> type is a text like, open it in current terminal session (vim or whatever)
+//Else: let the xdg-open command work
+void open_file(char *filename){
+  char filecmdresult[64];
+  cmdFile(filename,filecmdresult);
+  if (strstr(filecmdresult,"text") || strstr(filecmdresult,"empty")){
+    endwin();
+  
+    
+    sigset_t new_mask, old_mask;
+    //block resize signal, so our app wont get crazy
+    sigemptyset(&new_mask);
+    sigaddset(&new_mask, SIGWINCH);
+    sigprocmask(SIG_BLOCK, &new_mask, &old_mask);
+
+
+    pid_t pid = fork();
+    //spawn new process
+    if (pid == 0){
+      //replace new process with vim or whatever editor user put in argv
+      execlp(editor,editor,filename,NULL);
+      //if execlp failed
+      exit(EXIT_SUCCESS);
+    }else{
+      //parent process
+      int status;
+      //waiting for child process(file editing) to finish
+      waitpid(pid,&status,0);
+    }
+    //restores signal mask, now SIGWINCH can be delivered
+    sigprocmask(SIG_SETMASK, &old_mask, NULL);
+
+    refresh();
+    clear();
+    init_ncurses();
+    //force send resize signal so our app will process it again after blocking
+    raise(SIGWINCH);  
+  }
+  //if file is not text related or empty
+  else{
+    pid_t pid;
+    //spawning new process
+    pid = fork();
+    if (pid == 0){
+      //change stdout descriptor so we wont get any warning and shit from xdg-open
+      int null_fd = open("/dev/null",O_WRONLY);
+      dup2(null_fd,2);
+      //replaces process with xdg-open 
+      execlp("xdg-open","xdg-open",filename,NULL); 
+    }
+  }
+}
 void handle_user_input(FilesArray *fa,int user_input){
-  //for detecting key arrows
   switch(user_input){
     //Navigating backwards
     case KEY_DOWN:
@@ -394,19 +397,19 @@ void handle_user_input(FilesArray *fa,int user_input){
         else{
           open_file(filename);
         }
-
-
       }
       break;
 
 
 
     case KEY_RESIZE:
-      //updating values (for new screen size)
+      // updating values (for new screen size)
       update_values();
-      
+
       if (highlight > last_visible_file_index){
-        highlight = last_visible_file_index;
+        if (last_visible_file_index >= 0){
+          highlight = last_visible_file_index;
+        }
       }
 
       clear_and_recreate();
