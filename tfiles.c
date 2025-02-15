@@ -1,5 +1,3 @@
-//compile: gcc tfiles.c $(pkg-config ncursesw --libs --cflags)
-#include <bits/types/sigset_t.h>
 #include <linux/limits.h>
 #include <signal.h>
 #include <stdio.h>
@@ -43,11 +41,18 @@ int first_visible_file_index;
 //If we cd .. than this is again 1
 int show_previous_path = 1;
 
+//fzf
+//flag for fzf and draw_files funcs
+//in fzf we found file and put this flag to 1
+//in draw_files in flag is 1 we search for that file and put highlight on it
+//after we displayed file = flag is 0 again
+int show_found_file= 0;
+char found_filename[NAME_MAX];
+
 time_t last_mtime = 0;
 
 
 char *editor = NULL;
-
 
 
 void init_ncurses(){
@@ -58,6 +63,7 @@ void init_ncurses(){
   keypad(stdscr, true);
   start_color();
   init_pair(1,COLOR_YELLOW,COLOR_BLACK);
+  init_pair(2,COLOR_RED, COLOR_BLACK);
 }
 
 void opendir_wrap(DIR **dirp,char *path){
@@ -68,9 +74,23 @@ void opendir_wrap(DIR **dirp,char *path){
     exit(1);
   }
 }
+void chdir_wrap(char *path){
+  if (  (chdir(path)) != 0){
+    endwin();
+    perror("Unable to change directory");
+    exit(EXIT_SUCCESS);
+  }
+}
+
+
+
+
+
 void status_line_newwin(){
   status_line = newwin(status_line_height,stdscrX-1,stdscrY - status_line_height,0);
 }
+
+
 
 void init(int argc,char **argv){
   //argv[0] = always program name
@@ -90,11 +110,7 @@ void init(int argc,char **argv){
       if (strcmp(argument,"-path") == 0){
         if (i + 1 <= argc - 1){
           //Changing directory
-          if (chdir(argv[i+1]) == -1){
-            endwin();
-            perror("Bad argument(path)! Make sure that first argument is a valid path\n");
-            exit(1);
-          }
+          chdir_wrap(argv[i+1]); 
         }
       }
 
@@ -176,18 +192,24 @@ void FilesArray_fill(FilesArray *fa){
   struct dirent *entry;
   char *filename;
   DIR *dirp;
-  opendir_wrap(&dirp,".");
-
-
-  while ((entry = readdir(dirp)) != NULL){
-    //no . and .. dirs
-    if (strcmp(entry->d_name,".") != 0 && strcmp(entry->d_name,"..")!= 0 ){
-      filename = entry->d_name;
-      FilesArray_append(fa,filename);
-      dirlen ++;
+  if ( (dirp = opendir(".")) !=NULL){
+    while ((entry = readdir(dirp)) != NULL){
+      //no . and .. dirs
+      if (strcmp(entry->d_name,".") != 0 && strcmp(entry->d_name,"..")!= 0 ){
+        filename = entry->d_name;
+        FilesArray_append(fa,filename);
+        dirlen ++;
+      }
     }
   }
-  closedir(dirp);
+  else{
+    attron(COLOR_PAIR(2));
+    mvprintw(0,0,"Directory opening failed | Check your permissions or path validity");
+    attroff(COLOR_PAIR(2)); 
+    getch();
+
+  }
+ closedir(dirp);
 }
 
 //for qsort
@@ -264,6 +286,7 @@ void cmdFile(char *filename,char filecmdresult[64]){
   if ( (stream = popen(cmd,"r")) ){
     fgets(filecmdresult,64,stream);
   }
+  pclose(stream);
 }
 
 
@@ -323,6 +346,47 @@ void open_file(char *filename){
     }
   }
 }
+void fzf(char *mode){
+  
+  endwin();
+
+  if (strcmp(mode,"DEFAULT") == 0){
+    FILE *stream;
+    const char *cmd = "(find -maxdepth 1 ! -name '.') | sed 's|^\\./||' | fzf";
+    if (  (stream = popen(cmd,"r"))  ){
+      fgets(found_filename,NAME_MAX,stream);
+    }
+
+    found_filename[strlen(found_filename) - 1] = '\0';
+
+    show_found_file = 1;
+    pclose(stream);
+  }
+  if (strcmp(mode,"DIRS") == 0){
+    FILE *stream;
+    const char *cmd = "find / -type d 2>/dev/null | fzf";
+    char found_dir[PATH_MAX];
+
+    if (  (stream = popen(cmd,"r"))  ){
+      fgets(found_dir,PATH_MAX,stream);
+    }
+    
+    found_dir[strlen(found_dir) - 1] = '\0';
+    
+      
+    chdir(found_dir);
+
+    
+
+  }
+    
+    
+  
+  init_ncurses();
+
+}
+
+
 void handle_user_input(FilesArray *fa,int user_input){
   switch(user_input){
     //Navigating backwards
@@ -357,6 +421,7 @@ void handle_user_input(FilesArray *fa,int user_input){
         FilesArray_new(fa);
         show_previous_path = 1;
         strcpy(previous_path,pwd);
+
         //-1 As non existing index
         //If 0: we would leave the mark of 'selected' on the first file, is file is visible
         //But as we go to parent dir, we want to our highlight point to previous_path
@@ -380,7 +445,9 @@ void handle_user_input(FilesArray *fa,int user_input){
 
         //if current item(file) is a directory, than chdir
         if (is_dir(filename)){
+          clear_and_recreate();
           chdir(filename);
+
           FilesArray_free(fa);
           FilesArray_new(fa);
           //reset highlight
@@ -391,12 +458,39 @@ void handle_user_input(FilesArray *fa,int user_input){
           //to not compare with old last_mtime for previous directory
           update_last_mtime();
 
-          clear_and_recreate();
+          // clear_and_recreate();
         }
         //FILE
         else{
           open_file(filename);
         }
+      }
+      break;
+    
+    case KEY_FIND_FILE:
+      int second_input = getch();
+      //ff
+      if (second_input == 'f'){
+        fzf("DEFAULT");
+      }
+      //fc - start of possible "fcd"
+      if (second_input == 'c'){
+        int third_input = getch();
+        //"fcd" - fast change directory
+        if (third_input == 'd'){
+          clear_and_recreate();
+          fzf("DIRS");
+
+          //reseting app variables
+          FilesArray_free(fa);
+          FilesArray_new(fa);
+
+          highlight = 0;
+          dont_draw_file_index = -1;
+          
+          update_last_mtime();
+        }
+
       }
       break;
 
@@ -426,22 +520,40 @@ void draw_files(FilesArray filesArray){
   char fullpath[PATH_MAX];
   char *filename;
   for (int i = 0;i<dirlen;i++){
-    //if file is visible
+    filename = filesArray.filenames[i];
+    //getting file full path
+    //if our path is single-dashed (/home,/lib,/usr)
+    if (strcmp(pwd,"/") == 0){
+      //getting full path, length of filename + 2 ('/0' and '/')
+      snprintf(fullpath,strlen(filename) + 2,"/%s",filename);
+    }
+    else{
+      snprintf(fullpath, strlen(pwd) + strlen(filename) + 2, "%s/%s", pwd,filename);
+    }
+
+
+
+
+
+
+    //if file is visible (or somewhere above)
     if (i <= last_visible_file_index){
-      filename = filesArray.filenames[i];
-      //getting file full path
-      //if our path is single-dashed (/home,/lib,/usr)
-      if (strcmp(pwd,"/") == 0){
-        //getting full path, length of filename + 2 ('/0' and '/')
-        snprintf(fullpath,strlen(filename) + 2,"/%s",filename);
-      }
-      else{
-        snprintf(fullpath, strlen(pwd) + strlen(filename) + 2, "%s/%s", pwd,filename);
-      }
-      
 
 
-      //current file highlighting      
+
+      //if we just got out of fzf
+      char *chr_ptr_found_filename = &found_filename[0];
+      if (show_found_file == 1){
+        if (strcmp(filename, chr_ptr_found_filename) == 0){
+          highlight = i;
+          if (i < dont_draw_file_index){
+            dont_draw_file_index = i;
+          }
+          nodelay(stdscr,true);
+        }      
+      }
+
+
       if (strcmp(previous_path,fullpath) == 0){
         //If we just cd ..
         if (show_previous_path == 1){
@@ -449,10 +561,15 @@ void draw_files(FilesArray filesArray){
           attron(A_REVERSE);
           //setting highlight to found previous_path
           highlight = i;
+
+          
+
           //setting this to 0 so we won`t get highlight stuck on previous_path
           show_previous_path = 0;
         }
       }
+
+
       if (i == highlight){
         attron(A_REVERSE);
       }  
@@ -468,16 +585,28 @@ void draw_files(FilesArray filesArray){
     }
     //if file is beyond the screen
     else{
-      filename = filesArray.filenames[i];
-      snprintf(fullpath, strlen(pwd) + strlen(filename) + 2, "%s/%s", pwd,filename);
+      //if we just got out of fzf
+      char *chr_ptr_found_filename = &found_filename[0];
+      if (show_found_file == 1){
+        if (strcmp(filename, chr_ptr_found_filename) == 0){
+          highlight = i;
+          dont_draw_file_index = i - (stdscrY - 4);
+          nodelay(stdscr,true);
+          clear();
+        }      
+      }
+  
+
+
+
       //if we found previous_path that is beyond the screen
       if (strcmp(previous_path,fullpath) == 0){
         //do not let highlight get stuck on previous_path
         if (show_previous_path == 1){
           attroff(A_REVERSE); //just in case (may be useless)
           // setting dont_draw_file_index to new value, so we can see the previous_path that were beyond the screen
-          dont_draw_file_index = i - last_visible_file_index + 1;
           highlight = i;
+          dont_draw_file_index = i - (stdscrY - 4);
           show_previous_path = 0;
           //To ingore getch() in current iteration, so we can straight jump into new draw_files() function with new dont_draw_file_index
           nodelay(stdscr,true);
@@ -487,6 +616,7 @@ void draw_files(FilesArray filesArray){
 
     }
   }
+  show_found_file = 0;
 }
 
 void draw_status_line(){
@@ -505,6 +635,7 @@ int main(int argc,char **argv){
 
   FilesArray filesArray;
   FilesArray_new(&filesArray);
+  update_last_mtime();
 
 
 
@@ -534,6 +665,7 @@ int main(int argc,char **argv){
     user_input = getch();
     handle_user_input(&filesArray,user_input);
     refresh();
+
   }
 
 

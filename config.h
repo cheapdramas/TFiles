@@ -17,6 +17,12 @@
 
 #define KEY_SELECT_FILE 'l'
 #define KEY_SELECT_FILE1 '\n'
+
+//Search file | directory && Start button for find shortcuts
+#define KEY_FIND_FILE 'f'
+
+
+
 //Delete file
 #define KEY_DELETE_FILE 'd'
 
