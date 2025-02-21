@@ -67,6 +67,7 @@ int show_previous_path = 1;
 //after we displayed file = flag is 0 again
 int show_found_file= 0;
 char found_filename[NAME_MAX];
+char found_dir[PATH_MAX];
 
 time_t last_mtime = 0;
 
@@ -480,7 +481,7 @@ int remove_directory(char *path)
 
 
 
-void fzf(char *mode){
+void *fzf(char *mode){
   
   endwin();
 
@@ -499,25 +500,20 @@ void fzf(char *mode){
   if (strcmp(mode,"DIRS") == 0){
     FILE *stream;
     const char *cmd = "find / -type d 2>/dev/null | fzf";
-    char found_dir[PATH_MAX];
 
     if (  (stream = popen(cmd,"r"))  ){
       fgets(found_dir,PATH_MAX,stream);
     }
-    
-    found_dir[strlen(found_dir) - 1] = '\0';
-    
-      
+
+    if (strcmp(found_dir,pwd) !=0){
+      found_dir[strlen(found_dir) - 1] = '\0';
+    } 
     chdir(found_dir);
-
-    
-
   }
-    
-    
   
   init_ncurses();
 }
+
 
 
 
@@ -614,14 +610,16 @@ void handle_user_input(FilesArray *fa,int user_input){
         //"fcd" - fast change directory
         if (third_input == 'd'){
           clear_and_recreate();
+
           fzf("DIRS");
 
           //reseting app variables
           FilesArray_free(fa);
           FilesArray_new(fa);
-
-          highlight = 0;
-          dont_draw_file_index = -1;
+          if (strcmp(pwd,found_dir) != 0){
+            highlight = 0;
+            dont_draw_file_index = -1;
+          } 
           
           update_last_mtime();
         }
