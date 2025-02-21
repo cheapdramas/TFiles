@@ -1,3 +1,6 @@
+//compile: gcc tfiles.c $(pkg-config ncursesw --libs --cflags)
+
+#define _XOPEN_SOURCE 500
 #include <linux/limits.h>
 #include <signal.h>
 #include <stdio.h>
@@ -13,6 +16,10 @@
 #include "config.h" 
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <ftw.h>
+
+#define PAIR_COLOR_YELLOW 1
+#define PAIR_COLOR_RED 2
 
 
 //global scope variables
@@ -30,6 +37,18 @@ char previous_path[PATH_MAX];
 
 WINDOW *status_line;
 int status_line_height = 3;
+
+//Popup dialog window
+typedef struct{
+  WINDOW *MainPopup_win;
+  int MainSizeX,MainSizeY,MainStartY,MainStartX;
+
+  WINDOW *PopupConfirm_win;
+  int ConfirmSizeX,ConfirmSizeY,ConfirmStartY,ConfirmStartX;
+}Popup;
+
+
+
 
 //Minus one because we want to display all of the files at the start
 int dont_draw_file_index = -1; 
@@ -53,6 +72,9 @@ time_t last_mtime = 0;
 
 
 char *editor = NULL;
+
+
+
 
 
 void init_ncurses(){
@@ -203,9 +225,9 @@ void FilesArray_fill(FilesArray *fa){
     }
   }
   else{
-    attron(COLOR_PAIR(2));
+    attron(COLOR_PAIR(PAIR_COLOR_RED));
     mvprintw(0,0,"Directory opening failed | Check your permissions or path validity");
-    attroff(COLOR_PAIR(2)); 
+    attroff(COLOR_PAIR(PAIR_COLOR_RED)); 
     getch();
 
   }
@@ -228,6 +250,71 @@ void FilesArray_new(FilesArray *filesArray){
   FilesArray_fill(filesArray);
   FilesArray_sort(filesArray);  
 }
+
+
+
+Popup popup;
+void draw_error_in_popup_action(char *ErrorText){
+  werase(popup.MainPopup_win);
+  box(popup.MainPopup_win,0,0);
+  mvwprintw(popup.MainPopup_win,popup.MainSizeY - 2,2,"%s",ErrorText);
+  mvwprintw(popup.MainPopup_win,0,1,"Press any button to continue");
+  wrefresh(popup.MainPopup_win);
+}
+//0 == yes  || 1 == no
+void draw_buttons_popup_confirm(int which_button){
+  
+  if (which_button == 0){
+    wattron(popup.PopupConfirm_win,A_REVERSE);
+    mvwprintw(popup.PopupConfirm_win,1,1,"yes");
+    wattroff(popup.PopupConfirm_win,A_REVERSE);
+    mvwprintw(popup.PopupConfirm_win,1,popup.ConfirmSizeX - 3,"no");
+  }
+
+  if (which_button == 1){
+    wattron(popup.PopupConfirm_win,A_REVERSE);
+    mvwprintw(popup.PopupConfirm_win,1,popup.ConfirmSizeX - 3,"no");
+    wattroff(popup.PopupConfirm_win,A_REVERSE);
+    mvwprintw(popup.PopupConfirm_win,1,1,"yes");
+  }
+
+  wrefresh(popup.PopupConfirm_win);
+}
+void draw_delete_popup(char *filename){
+  refresh();
+  popup.MainSizeY = stdscrY / 2;
+  popup.MainSizeX = stdscrX / 2;
+  popup.MainStartY = 0;
+  popup.MainStartX = popup.MainSizeX/2;
+
+  popup.MainPopup_win = newwin(
+    popup.MainSizeY,
+    popup.MainSizeX,
+    popup.MainStartY,
+    popup.MainStartX
+  );
+  box(popup.MainPopup_win,0,0);
+  mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"Delete %s ?",filename);
+  wrefresh(popup.MainPopup_win);
+
+  
+  popup.ConfirmSizeY  =  popup.MainSizeY / 3;
+  popup.ConfirmSizeX  =  popup.MainSizeX - 2;
+  popup.ConfirmStartY =  popup.MainSizeY-popup.ConfirmSizeY - 1;
+  popup.ConfirmStartX =  popup.MainStartX + 1;
+
+  popup.PopupConfirm_win = newwin(
+     popup.ConfirmSizeY, 
+     popup.ConfirmSizeX,
+     popup.ConfirmStartY,  
+     popup.ConfirmStartX
+  );
+  box(popup.PopupConfirm_win,0,0);
+  wrefresh(popup.PopupConfirm_win);
+}
+void delete_popup(FilesArray *fa,char *filename);
+
+
 
 
 
@@ -276,6 +363,31 @@ bool is_dir(char *filename){
   }
   return S_ISDIR(file_stat.st_mode);
 }
+
+
+
+void resize_event(){
+  // updating values (for new screen size)
+  update_values();
+  //if highlight is trying to get out of a user view
+  if (highlight > last_visible_file_index){
+    if (last_visible_file_index >= 0){
+      highlight = last_visible_file_index;
+    }
+  }
+  clear_and_recreate();
+}
+
+//Getch wrap to hold unexpected resize signal
+int getch_wrap(){
+  int input = getch();
+  if (input == KEY_RESIZE){
+    resize_event();
+  }  
+  return input;
+}
+
+
 
 //calls 'file <filename>' to get file info and writes it to filecmdresult
 void cmdFile(char *filename,char filecmdresult[64]){
@@ -346,6 +458,28 @@ void open_file(char *filename){
     }
   }
 }
+
+int delete_file(char *filename){
+  if (remove(filename) != 0){
+    return 1;
+  }
+  return 0;
+}
+
+//for remove_directory func
+int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf){
+  int rv = remove(fpath);
+
+  return rv;
+}
+
+int remove_directory(char *path)
+{
+  return nftw(path, unlink_cb, 64, FTW_DEPTH | FTW_PHYS);
+}
+
+
+
 void fzf(char *mode){
   
   endwin();
@@ -383,8 +517,9 @@ void fzf(char *mode){
     
   
   init_ncurses();
-
 }
+
+
 
 
 void handle_user_input(FilesArray *fa,int user_input){
@@ -439,7 +574,7 @@ void handle_user_input(FilesArray *fa,int user_input){
     case KEY_RIGHT:
     case KEY_SELECT_FILE:
     case KEY_SELECT_FILE1:
-      if (dirlen >= 1){
+      if (dirlen > 0){
         char *filename = fa->filenames[highlight];
         
 
@@ -468,14 +603,14 @@ void handle_user_input(FilesArray *fa,int user_input){
       break;
     
     case KEY_FIND_FILE:
-      int second_input = getch();
+      int second_input = getch_wrap();
       //ff
       if (second_input == 'f'){
         fzf("DEFAULT");
       }
       //fc - start of possible "fcd"
       if (second_input == 'c'){
-        int third_input = getch();
+        int third_input = getch_wrap();
         //"fcd" - fast change directory
         if (third_input == 'd'){
           clear_and_recreate();
@@ -495,20 +630,19 @@ void handle_user_input(FilesArray *fa,int user_input){
       break;
 
 
+    case KEY_DELETE_FILE:
+      if (dirlen > 0){
+        char *filename = fa->filenames[highlight];
+        char message[11 + strlen(filename)];
+        snprintf(message, 11+ strlen(filename), "Delete %s ?",filename);
 
-    case KEY_RESIZE:
-      // updating values (for new screen size)
-      update_values();
+        char *message_p = &message[0];  
 
-      if (highlight > last_visible_file_index){
-        if (last_visible_file_index >= 0){
-          highlight = last_visible_file_index;
-        }
+        delete_popup(fa,filename);
+       
       }
 
-      clear_and_recreate();
-
-      break;
+      break; 
     default:
       break;
   }
@@ -576,12 +710,12 @@ void draw_files(FilesArray filesArray){
     
 
       if (is_dir(filename)){
-        attron(COLOR_PAIR(1));
+        attron(COLOR_PAIR(PAIR_COLOR_YELLOW));
       }
       //Printing the filename (-1 * dont_draw_file_index creates the scroll effect)
       mvprintw(i + (-1 * dont_draw_file_index),0," %s\n",filesArray.filenames[i]);
       attroff(A_REVERSE);
-      attroff(COLOR_PAIR(1));
+      attroff(COLOR_PAIR(PAIR_COLOR_YELLOW));
     }
     //if file is beyond the screen
     else{
@@ -621,9 +755,9 @@ void draw_files(FilesArray filesArray){
 
 void draw_status_line(){
   refresh();
-  mvprintw(stdscrY-(status_line_height-1),1,"%s",pwd);
   box(status_line,0,0);
   wrefresh(status_line);
+  mvprintw(stdscrY-(status_line_height-1),1,"%s",pwd);
 }
 
 
@@ -662,7 +796,7 @@ int main(int argc,char **argv){
     draw_files(filesArray);
     draw_status_line();
 
-    user_input = getch();
+    user_input = getch_wrap();
     handle_user_input(&filesArray,user_input);
     refresh();
 
@@ -671,4 +805,103 @@ int main(int argc,char **argv){
 
   endwin();
   return 0;
+}
+
+void delete_popup(FilesArray *fa,char *filename){
+  draw_delete_popup(filename);
+  draw_buttons_popup_confirm(0);
+
+  int user_input;
+  int which_button = 0;
+  while(user_input){
+    user_input = getch();
+    switch (user_input) {
+      //Escape button (why is it so slow)
+      case 27:
+        clear();
+        return;
+  
+      //Move to "no"
+      case KEY_RIGHT:
+      case KEY_SELECT_FILE:
+        which_button = 1;
+        draw_buttons_popup_confirm(which_button);
+        break;
+      //Move to "yes"
+      case KEY_LEFT:
+      case KEY_NAV_PARENTDIR:
+        which_button = 0;
+        draw_buttons_popup_confirm(which_button);
+        break;
+
+
+      //YES
+      case 'y':
+      case 'Y':
+        if (is_dir(filename)){
+            if (remove_directory(filename) != 0){
+              draw_error_in_popup_action("Unable to delete this file");
+              getch_wrap();
+            }
+          }
+        else{
+            if (delete_file(filename)!= 0){
+              draw_error_in_popup_action("Unable to delete this file");
+              getch_wrap();
+            }
+          }
+
+        
+        clear();
+        FilesArray_free(fa);
+        FilesArray_new(fa);
+        return;
+      //NO
+      case 'n':
+      case 'N':
+        clear();
+        return;
+
+      case '\n':
+        //YES
+        if (which_button == 0){
+          if (is_dir(filename)){
+            if (remove_directory(filename) != 0){
+              draw_error_in_popup_action("Unable to delete this file");
+              getch_wrap();
+            }
+          }
+          else{
+            if (delete_file(filename)!= 0){
+              draw_error_in_popup_action("Unable to delete this file");
+              getch_wrap();
+            }
+          }
+
+          
+          clear();
+          FilesArray_free(fa);
+          FilesArray_new(fa);
+          return;
+        }
+        //NO
+        else{
+          clear();
+          return;
+        }
+
+
+
+
+
+      case KEY_RESIZE:
+        resize_event();
+        draw_files(*fa);
+        draw_delete_popup(filename);
+        draw_buttons_popup_confirm(which_button);
+        draw_status_line();
+        break;
+    }
+  }
+
 }
