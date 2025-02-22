@@ -264,6 +264,28 @@ void draw_border(WINDOW *w){
 
 
 Popup popup;
+void update_popup_size_and_pos(){
+  popup.MainSizeY = 13;
+  if (popup.MainSizeY > stdscrY){
+    popup.MainSizeY = stdscrY;
+  }
+  popup.MainSizeX = 62;
+  if (popup.MainSizeX > stdscrX){
+    popup.MainSizeX= stdscrX;
+  }
+  popup.MainStartY = (stdscrY / 2) - popup.MainSizeY/2;
+  popup.MainStartX = (stdscrX / 2) - popup.MainSizeX / 2;
+
+
+  popup.ConfirmSizeY  = popup.MainSizeY / 5;
+  popup.ConfirmSizeX  = popup.MainSizeX - 2;
+  popup.ConfirmStartY = (stdscrY/2) +popup.ConfirmSizeY +2;
+  popup.ConfirmStartX = popup.MainStartX+1;
+
+
+
+
+}
 void draw_error_in_popup_action(char *ErrorText){
   werase(popup.MainPopup_win);
   box(popup.MainPopup_win,0,0);
@@ -292,18 +314,7 @@ void draw_buttons_popup_confirm(int which_button){
 }
 void draw_delete_popup(char *filename){
   refresh();
-  
-  popup.MainSizeY = 13;
-  if (popup.MainSizeY > stdscrY){
-    popup.MainSizeY = stdscrY;
-  }
-  popup.MainSizeX = 62;
-  if (popup.MainSizeX > stdscrX){
-    popup.MainSizeX= stdscrX;
-  }
-  popup.MainStartY = (stdscrY / 2) - popup.MainSizeY/2;
-  popup.MainStartX = (stdscrX / 2) - popup.MainSizeX / 2;
-
+  update_popup_size_and_pos(); 
   popup.MainPopup_win = newwin(
     popup.MainSizeY,
     popup.MainSizeX,
@@ -314,12 +325,6 @@ void draw_delete_popup(char *filename){
   mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"Delete files?");
   mvwprintw(popup.MainPopup_win,1,2,"%s",filename);
   wrefresh(popup.MainPopup_win);
-
-
-  popup.ConfirmSizeY  = popup.MainSizeY / 5;
-  popup.ConfirmSizeX  = popup.MainSizeX - 2;
-  popup.ConfirmStartY = (stdscrY/2) +popup.ConfirmSizeY +2;
-  popup.ConfirmStartX = popup.MainStartX+1;
 
   popup.PopupConfirm_win = newwin(
      popup.ConfirmSizeY, 
@@ -923,11 +928,14 @@ void delete_popup(FilesArray *fa,char *filename){
         clear();
         getmaxyx(stdscr, stdscrY,stdscrX);
         
-        draw_delete_popup(filename);
-        if (popup.MainSizeY + status_line_height-1<stdscrY ){
-          draw_files(*fa);
-          draw_buttons_popup_confirm(which_button);
-        }
+        delwin(popup.MainPopup_win);
+        delwin(popup.PopupConfirm_win);
+        delwin(status_line);
+        //update popup.Main... size and pos values
+        update_popup_size_and_pos();
+        update_values();
+        draw_files(*fa);
+        refresh();
         status_line_newwin();
         draw_status_line();
         draw_delete_popup(filename);
