@@ -252,6 +252,15 @@ void FilesArray_new(FilesArray *filesArray){
   FilesArray_sort(filesArray);  
 }
 
+void draw_border(WINDOW *w){
+  int left,right,top,bottom,tlc,trc,blc,brc;
+  left = right = ' ';
+  top = 0;
+  bottom = blc =brc = ' ';
+  tlc = trc = blc= brc = ' ';
+  wborder(w,left,right,top,bottom, tlc,trc,blc,brc);
+  wrefresh(w);
+}
 
 
 Popup popup;
@@ -283,10 +292,17 @@ void draw_buttons_popup_confirm(int which_button){
 }
 void draw_delete_popup(char *filename){
   refresh();
-  popup.MainSizeY = stdscrY / 2;
-  popup.MainSizeX = stdscrX / 2;
-  popup.MainStartY = 0;
-  popup.MainStartX = popup.MainSizeX/2;
+  
+  popup.MainSizeY = 13;
+  if (popup.MainSizeY > stdscrY){
+    popup.MainSizeY = stdscrY;
+  }
+  popup.MainSizeX = 62;
+  if (popup.MainSizeX > stdscrX){
+    popup.MainSizeX= stdscrX;
+  }
+  popup.MainStartY = (stdscrY / 2) - popup.MainSizeY/2;
+  popup.MainStartX = (stdscrX / 2) - popup.MainSizeX / 2;
 
   popup.MainPopup_win = newwin(
     popup.MainSizeY,
@@ -295,14 +311,15 @@ void draw_delete_popup(char *filename){
     popup.MainStartX
   );
   box(popup.MainPopup_win,0,0);
-  mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"Delete %s ?",filename);
+  mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"Delete files?");
+  mvwprintw(popup.MainPopup_win,1,2,"%s",filename);
   wrefresh(popup.MainPopup_win);
 
-  
-  popup.ConfirmSizeY  =  popup.MainSizeY / 3;
-  popup.ConfirmSizeX  =  popup.MainSizeX - 2;
-  popup.ConfirmStartY =  popup.MainSizeY-popup.ConfirmSizeY - 1;
-  popup.ConfirmStartX =  popup.MainStartX + 1;
+
+  popup.ConfirmSizeY  = popup.MainSizeY / 5;
+  popup.ConfirmSizeX  = popup.MainSizeX - 2;
+  popup.ConfirmStartY = (stdscrY/2) +popup.ConfirmSizeY +2;
+  popup.ConfirmStartX = popup.MainStartX+1;
 
   popup.PopupConfirm_win = newwin(
      popup.ConfirmSizeY, 
@@ -310,9 +327,11 @@ void draw_delete_popup(char *filename){
      popup.ConfirmStartY,  
      popup.ConfirmStartX
   );
-  box(popup.PopupConfirm_win,0,0);
+  draw_border(popup.PopupConfirm_win);
   wrefresh(popup.PopupConfirm_win);
 }
+
+
 void delete_popup(FilesArray *fa,char *filename);
 
 
@@ -504,11 +523,12 @@ void *fzf(char *mode){
     if (  (stream = popen(cmd,"r"))  ){
       fgets(found_dir,PATH_MAX,stream);
     }
-
     if (strcmp(found_dir,pwd) !=0){
       found_dir[strlen(found_dir) - 1] = '\0';
     } 
     chdir(found_dir);
+
+
   }
   
   init_ncurses();
@@ -751,10 +771,11 @@ void draw_files(FilesArray filesArray){
   show_found_file = 0;
 }
 
+
 void draw_status_line(){
   refresh();
-  box(status_line,0,0);
-  wrefresh(status_line);
+  // box(status_line,0,0);
+  draw_border(status_line);
   mvprintw(stdscrY-(status_line_height-1),1,"%s",pwd);
 }
 
@@ -857,7 +878,10 @@ void delete_popup(FilesArray *fa,char *filename){
       //NO
       case 'n':
       case 'N':
-        clear();
+        werase(popup.MainPopup_win);
+        werase(popup.PopupConfirm_win);
+        wrefresh(popup.MainPopup_win);
+        wrefresh(popup.PopupConfirm_win);
         return;
 
       case '\n':
@@ -884,7 +908,10 @@ void delete_popup(FilesArray *fa,char *filename){
         }
         //NO
         else{
-          clear();
+          werase(popup.MainPopup_win);
+          werase(popup.PopupConfirm_win);
+          wrefresh(popup.MainPopup_win);
+          wrefresh(popup.PopupConfirm_win);
           return;
         }
 
@@ -893,11 +920,18 @@ void delete_popup(FilesArray *fa,char *filename){
 
 
       case KEY_RESIZE:
-        resize_event();
-        draw_files(*fa);
+        clear();
+        getmaxyx(stdscr, stdscrY,stdscrX);
+        
+        draw_delete_popup(filename);
+        if (popup.MainSizeY + status_line_height-1<stdscrY ){
+          draw_files(*fa);
+          draw_buttons_popup_confirm(which_button);
+        }
+        status_line_newwin();
+        draw_status_line();
         draw_delete_popup(filename);
         draw_buttons_popup_confirm(which_button);
-        draw_status_line();
         break;
     }
   }
