@@ -264,7 +264,11 @@ void draw_border(WINDOW *w){
 
 
 Popup popup;
-void update_popup_size_and_pos(){
+void PopupRename(FilesArray *fa,char *filename);
+void PopupDelete(FilesArray *fa,char *filename);
+
+
+void Popup_update_size_and_pos(){
   popup.MainSizeY = 13;
   if (popup.MainSizeY > stdscrY){
     popup.MainSizeY = stdscrY;
@@ -281,12 +285,10 @@ void update_popup_size_and_pos(){
   popup.ConfirmSizeX  = popup.MainSizeX - 2;
   popup.ConfirmStartY = (stdscrY/2) +popup.ConfirmSizeY +2;
   popup.ConfirmStartX = popup.MainStartX+1;
-
-
-
-
 }
-void draw_error_in_popup_action(char *ErrorText){
+
+
+void Popup_draw_error(char *ErrorText){
   werase(popup.MainPopup_win);
   box(popup.MainPopup_win,0,0);
   mvwprintw(popup.MainPopup_win,popup.MainSizeY - 2,2,"%s",ErrorText);
@@ -294,7 +296,7 @@ void draw_error_in_popup_action(char *ErrorText){
   wrefresh(popup.MainPopup_win);
 }
 //0 == yes  || 1 == no
-void draw_buttons_popup_confirm(int which_button){
+void Popup_draw_confirm_buttons(int which_button){
   
   if (which_button == 0){
     wattron(popup.PopupConfirm_win,A_REVERSE);
@@ -312,9 +314,11 @@ void draw_buttons_popup_confirm(int which_button){
 
   wrefresh(popup.PopupConfirm_win);
 }
-void draw_delete_popup(char *filename){
+void Popup_draw_base(){
   refresh();
-  update_popup_size_and_pos(); 
+  Popup_update_size_and_pos(); 
+
+
   popup.MainPopup_win = newwin(
     popup.MainSizeY,
     popup.MainSizeX,
@@ -322,9 +326,8 @@ void draw_delete_popup(char *filename){
     popup.MainStartX
   );
   box(popup.MainPopup_win,0,0);
-  mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"Delete files?");
-  mvwprintw(popup.MainPopup_win,1,2,"%s",filename);
   wrefresh(popup.MainPopup_win);
+
 
   popup.PopupConfirm_win = newwin(
      popup.ConfirmSizeY, 
@@ -337,7 +340,43 @@ void draw_delete_popup(char *filename){
 }
 
 
-void delete_popup(FilesArray *fa,char *filename);
+void PopupDelete_draw(char *filename){
+  Popup_draw_base();
+  mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"Delete files?");
+  mvwprintw(popup.MainPopup_win,1,2,"%s",filename);
+  wrefresh(popup.MainPopup_win);
+}
+// void PopupRename_draw(char *filename) {
+//     echo();  // Enable user input visibility
+//     Popup_draw_base();  // Draws the base popup window
+
+//     char new_filename[NAME_MAX];
+//     strcpy(new_filename, filename);
+
+//     // Print the old filename in the input field
+//     mvwprintw(popup.MainPopup_win, 1, 1, "%s", new_filename);
+//     wmove(popup.MainPopup_win, 1, strlen(new_filename) + 1);  // Move cursor to end
+//     wrefresh(popup.MainPopup_win);  // Refresh popup window
+
+//     // Allow the user to edit the filename
+//     wgetnstr(popup.MainPopup_win, new_filename, NAME_MAX - 1);
+
+//     clear();
+//     mvprintw(0, 0, "New filename: %s", new_filename);
+//     refresh();
+//     noecho();  // Enable user input visibility
+
+// }
+void PopupRename_draw(char *filename) {
+    echo();
+    Popup_draw_base();  // Draws the base popup window
+
+    char new_filename[NAME_MAX];
+    strcpy(new_filename, filename); // Copy old filename into the buffer
+    clear();
+    mvprintw(0, 0, "New filename: %s", new_filename);
+    refresh();
+}
 
 
 
@@ -506,11 +545,18 @@ int remove_directory(char *path)
 
 
 void *fzf(char *mode){
-  
   endwin();
 
+	sigset_t new_mask, old_mask;
+	//block resize signal
+	sigemptyset(&new_mask);
+	sigaddset(&new_mask, SIGWINCH);
+	sigprocmask(SIG_BLOCK, &new_mask, &old_mask);
+
+
+
   if (strcmp(mode,"DEFAULT") == 0){
-    FILE *stream;
+		FILE *stream;
     const char *cmd = "(find -maxdepth 1 ! -name '.') | sed 's|^\\./||' | fzf";
     if (  (stream = popen(cmd,"r"))  ){
       fgets(found_filename,NAME_MAX,stream);
@@ -520,7 +566,10 @@ void *fzf(char *mode){
 
     show_found_file = 1;
     pclose(stream);
-  }
+    sigprocmask(SIG_SETMASK, &old_mask, NULL);
+		raise(SIGWINCH);
+	}
+  
   if (strcmp(mode,"DIRS") == 0){
     FILE *stream;
     const char *cmd = "find / -type d 2>/dev/null | fzf";
@@ -533,6 +582,8 @@ void *fzf(char *mode){
     } 
     chdir(found_dir);
 
+    sigprocmask(SIG_SETMASK, &old_mask, NULL);
+		raise(SIGWINCH);
 
   }
   
@@ -621,6 +672,7 @@ void handle_user_input(FilesArray *fa,int user_input){
           open_file(filename);
         }
       }
+
       break;
     
     case KEY_FIND_FILE:
@@ -661,11 +713,18 @@ void handle_user_input(FilesArray *fa,int user_input){
 
         char *message_p = &message[0];  
 
-        delete_popup(fa,filename);
-       
+        PopupDelete(fa,filename);
       }
 
       break; 
+    case KEY_RENAME_FILE:
+      if (dirlen > 0){
+        char *filename = fa->filenames[highlight];
+        PopupRename(fa, filename);
+      } 
+
+      break;
+       
     default:
       break;
   }
@@ -831,9 +890,9 @@ int main(int argc,char **argv){
   return 0;
 }
 
-void delete_popup(FilesArray *fa,char *filename){
-  draw_delete_popup(filename);
-  draw_buttons_popup_confirm(0);
+void PopupDelete(FilesArray *fa,char *filename){
+  PopupDelete_draw(filename);
+  Popup_draw_confirm_buttons(0);
 
   int user_input;
   int which_button = 0;
@@ -849,13 +908,13 @@ void delete_popup(FilesArray *fa,char *filename){
       case KEY_RIGHT:
       case KEY_SELECT_FILE:
         which_button = 1;
-        draw_buttons_popup_confirm(which_button);
+        Popup_draw_confirm_buttons(which_button);
         break;
       //Move to "yes"
       case KEY_LEFT:
       case KEY_NAV_PARENTDIR:
         which_button = 0;
-        draw_buttons_popup_confirm(which_button);
+        Popup_draw_confirm_buttons(which_button);
         break;
 
 
@@ -864,19 +923,20 @@ void delete_popup(FilesArray *fa,char *filename){
       case 'Y':
         if (is_dir(filename)){
             if (remove_directory(filename) != 0){
-              draw_error_in_popup_action("Unable to delete this file");
+              Popup_draw_error("Unable to delete this file");
               getch_wrap();
             }
           }
         else{
             if (delete_file(filename)!= 0){
-              draw_error_in_popup_action("Unable to delete this file");
+              Popup_draw_error("Unable to delete this file");
               getch_wrap();
             }
           }
 
         
-        clear();
+        delwin(popup.MainPopup_win);
+        delwin(popup.PopupConfirm_win);
         FilesArray_free(fa);
         FilesArray_new(fa);
         return;
@@ -887,6 +947,8 @@ void delete_popup(FilesArray *fa,char *filename){
         werase(popup.PopupConfirm_win);
         wrefresh(popup.MainPopup_win);
         wrefresh(popup.PopupConfirm_win);
+        delwin(popup.MainPopup_win);
+        delwin(popup.PopupConfirm_win);
         return;
 
       case '\n':
@@ -894,19 +956,21 @@ void delete_popup(FilesArray *fa,char *filename){
         if (which_button == 0){
           if (is_dir(filename)){
             if (remove_directory(filename) != 0){
-              draw_error_in_popup_action("Unable to delete this file");
+              Popup_draw_error("Unable to delete this file");
               getch_wrap();
             }
           }
           else{
             if (delete_file(filename)!= 0){
-              draw_error_in_popup_action("Unable to delete this file");
+              Popup_draw_error("Unable to delete this file");
               getch_wrap();
             }
           }
 
           
           clear();
+          delwin(popup.MainPopup_win);          
+          delwin(popup.PopupConfirm_win);
           FilesArray_free(fa);
           FilesArray_new(fa);
           return;
@@ -917,6 +981,8 @@ void delete_popup(FilesArray *fa,char *filename){
           werase(popup.PopupConfirm_win);
           wrefresh(popup.MainPopup_win);
           wrefresh(popup.PopupConfirm_win);
+          delwin(popup.MainPopup_win);          
+          delwin(popup.PopupConfirm_win);
           return;
         }
 
@@ -932,16 +998,19 @@ void delete_popup(FilesArray *fa,char *filename){
         delwin(popup.PopupConfirm_win);
         delwin(status_line);
         //update popup.Main... size and pos values
-        update_popup_size_and_pos();
+        Popup_update_size_and_pos();
         update_values();
         draw_files(*fa);
         refresh();
         status_line_newwin();
         draw_status_line();
-        draw_delete_popup(filename);
-        draw_buttons_popup_confirm(which_button);
+        PopupDelete_draw(filename);
+        Popup_draw_confirm_buttons(which_button);
         break;
     }
   }
-
+}
+void PopupRename(FilesArray *fa,char *filename){
+  PopupRename_draw(filename); 
+  
 }
