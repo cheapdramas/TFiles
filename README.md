@@ -11,6 +11,6 @@ Terminal file manager for linux
 | <kbd>b</kbd> | Go to parent directory |
 | <kbd>ff</kbd> | Search files in current directory |
 | <kbd>fcd</kbd> | Fast Change Directory.Change directory to any that avaible on your pc |
-| <kbd>d</kbd> | Crea file. Add "/" to the end to create directory |
+| <kbd>a</kbd> | Create file. Add "/" to the end to create directory |
 | <kbd>d</kbd> | Delete file |
 | <kbd>q</kbd> | Quit |
