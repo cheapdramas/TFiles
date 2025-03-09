@@ -21,10 +21,13 @@
 //Search file | directory && Start button for find shortcuts
 #define KEY_FIND_FILE 'f'
 
+// Create new file
+#define KEY_CREATE_FILE 'a'
 
 
 //Delete file
 #define KEY_DELETE_FILE 'd'
+#define KEY_RENAME_FILE 'r'
 
 
 #define MAX_ARGC = 2
