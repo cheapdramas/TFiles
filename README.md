@@ -14,3 +14,7 @@ Terminal file manager for linux
 | <kbd>a</kbd> | Create file. Add "/" to the end to create directory |
 | <kbd>d</kbd> | Delete file |
 | <kbd>q</kbd> | Quit |
+
+## Parameters
+1. Setting start path:  `tfiles -path <YOUR_PATH>`
+2. Setting text editor: `tfiles -editor <EDITOR_THAT_IN_PATH>`
