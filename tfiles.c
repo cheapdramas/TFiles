@@ -1,12 +1,11 @@
 //compile: gcc tfiles.c $(pkg-config ncursesw --libs --cflags)
-
 #define _XOPEN_SOURCE 500
 #include <linux/limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <ncurses.h>
+// #include <ncurses.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <string.h>
@@ -17,9 +16,11 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <ftw.h>
+#include <ncursesw/ncurses.h>
 
 #define PAIR_COLOR_YELLOW 1
 #define PAIR_COLOR_RED 2
+
 
 
 //global scope variables
@@ -130,7 +131,6 @@ void init(int argc,char **argv){
   }
 
   if (argc >=  2){
-
     //start iterating through arguments 
     for (int i = 1;i < argc;i++){
       char *argument = argv[i];
@@ -161,11 +161,11 @@ void init(int argc,char **argv){
       }
     }
   }
+
   // initializing an status_line
   getcwd(pwd,sizeof(pwd));
   status_line_newwin(); 
 }
-
 
 typedef struct {
   char ** filenames;
@@ -268,12 +268,16 @@ void draw_border(WINDOW *w){
   wborder(w,left,right,top,bottom, tlc,trc,blc,brc);
   wrefresh(w);
 }
+void update_values();
+void draw_files(FilesArray filesArray);
+void draw_status_line();
+
 
 
 Popup popup;
 // Those functions described below main function
-/*void PopupRename(FilesArray *fa,char *filename);*/
 void PopupDelete(FilesArray *fa,char *filename);
+void PopupRenameFile(char *filename,FilesArray *fa);
 void PopupCreateFile(FilesArray *fa);
 
 void Popup_update_size_and_pos(){
@@ -289,12 +293,17 @@ void Popup_update_size_and_pos(){
   popup.MainStartX = (stdscrX / 2) - popup.MainSizeX / 2;
 
 
+  //Can someone explain to me why it doesn`t shows up
+  //at 35x9?
+  //pls god
+  //chatgpt help me
+	//my math sucks
+	//я сраний двоющнік(токо по фізікі ;) )
   popup.ConfirmSizeY  = popup.MainSizeY / 5;
   popup.ConfirmSizeX  = popup.MainSizeX - 2;
-  popup.ConfirmStartY = (stdscrY/2) +popup.ConfirmSizeY +2;
+  popup.ConfirmStartY = popup.MainStartY + popup.MainSizeY-3 ;
   popup.ConfirmStartX = popup.MainStartX+1;
 }
-
 
 void Popup_draw_error(char *ErrorText){
   werase(popup.MainPopup_win);
@@ -305,15 +314,14 @@ void Popup_draw_error(char *ErrorText){
 }
 //0 == yes  || 1 == no
 void Popup_draw_confirm_buttons(int which_button){
-  
-  if (which_button == 0){
+	
+  if (which_button == 0)
+	{
     wattron(popup.PopupConfirm_win,A_REVERSE);
     mvwprintw(popup.PopupConfirm_win,1,1,"yes");
     wattroff(popup.PopupConfirm_win,A_REVERSE);
     mvwprintw(popup.PopupConfirm_win,1,popup.ConfirmSizeX - 3,"no");
-  }
-
-  if (which_button == 1){
+  }else{
     wattron(popup.PopupConfirm_win,A_REVERSE);
     mvwprintw(popup.PopupConfirm_win,1,popup.ConfirmSizeX - 3,"no");
     wattroff(popup.PopupConfirm_win,A_REVERSE);
@@ -348,10 +356,254 @@ void Popup_draw_base(int draw_confirm){
 	}
 }
 
+void PopupPrintInside(char *text,int consider_confirm){
+  int y = 1;
+  int x = 1;
+  char *old_text= text;
+  if (!consider_confirm){
+    popup.ConfirmSizeY = 0;
+  }
+  for (int i = 0;old_text[i] != '\0';i++){
+    // if (y < popup.MainSizeY - popup.ConfirmSizeY - 2 + consider_confirm){
+    //Out of border
+    if (x > popup.MainSizeX - 2){
+      x=1;
+      y+=1;
+      if (y > popup.MainSizeY - 2){return;}
+    }
+    wchar_t wc;        
+    mbtowc(&wc, text, MB_CUR_MAX);
+    mvwprintw(popup.MainPopup_win, y, x, "%lc", wc);  // Print first character
+    text+=1;
+    x+=1;
+  }
+}
+
+
+
+int PopupInput(
+	char *input_from_start,
+	char **final_input,
+  size_t final_input_size,
+	void (*draw_func)(),
+	FilesArray *fa
+){
+	curs_set(1);	
+	int user_input;
+	int text_len =0;
+
+  char text_dummy[final_input_size];
+
+	int cursor_x= 1,cursor_y = 1;
+	int cursor_to_word = 0;
+	int confirm;
+
+	if (input_from_start!=NULL){
+    // Set final_input to input_from_start, so we could start editing the right
+		// thing
+		text_len = strlen(input_from_start); 		
+		cursor_to_word = text_len;
+    strcpy(text_dummy,input_from_start);
+		// This will set our cursor into the last character of input_from_start
+		PopupPrintInside(text_dummy,0);
+    
+		// Updating cursor position
+		getyx(popup.MainPopup_win,cursor_y,cursor_x);
+	}
+	strcpy(*final_input,text_dummy);
+
+
+	wmove(popup.MainPopup_win,cursor_y,cursor_x);
+	wrefresh(popup.MainPopup_win);
+
+	
+
+	while (true){
+		user_input = getch();
+		if (user_input == '\n'){
+			confirm = 1;
+			break;
+		}
+		if (user_input == 27){
+			confirm = 0;
+			break;
+		}
+	
+    // Bro is typing characters
+    if (user_input != 127 && user_input != '\b'&& user_input != KEY_BACKSPACE && user_input != KEY_LEFT && user_input != KEY_RIGHT && user_input != KEY_UP && user_input != KEY_DOWN && user_input != '\t' && user_input != KEY_RESIZE)
+		{
+      if (text_len + 1 <= final_input_size){
+				// If not on the end of input
+        if (cursor_to_word < text_len){
+          char replaced_char = text_dummy[cursor_to_word];
+          text_dummy[cursor_to_word] = user_input; 
+          for (int i = cursor_to_word + 1; i < text_len+1;i++){
+            char temp = text_dummy[i];
+            text_dummy[i] = replaced_char;
+            replaced_char = temp;
+          }
+          text_dummy[text_len += 1] = '\0';
+          cursor_x += 1;
+          if (cursor_x > popup.MainSizeX - 2){
+            if (cursor_y < popup.MainSizeY - 1){
+              cursor_x = 1;
+              cursor_y += 1;
+            }
+          }
+        }else{
+          text_dummy[text_len] = user_input;
+          text_dummy[text_len+= 1] = '\0';
+        }
+
+        cursor_to_word += 1;
+
+
+
+
+        strcpy(*final_input,text_dummy);
+        PopupPrintInside(*final_input,0);
+
+				if (cursor_to_word < text_len){
+					wmove(popup.MainPopup_win,cursor_y,cursor_x);
+				}
+				else
+				{
+					getyx(popup.MainPopup_win,cursor_y,cursor_x);
+				}
+
+
+				wrefresh(popup.MainPopup_win);
+		}		
+  }	
+		if (user_input == '\b' || user_input == KEY_BACKSPACE){
+			for (int i = cursor_to_word - 1;i<text_len;i++){
+				text_dummy[i] = text_dummy[i+1];
+			}
+			if (cursor_to_word > 0){
+				cursor_to_word -= 1;
+			}
+			if (text_len > 0){
+				text_len -= 1;
+				text_dummy[text_len] = '\0';
+			}
+
+			if (cursor_y > 1){
+				if (cursor_x - 1 < 1){
+					cursor_x = popup.MainSizeX - 2;
+					cursor_y -= 1;
+				}
+				// Free move
+				else{
+					cursor_x -= 1;
+				}
+			}
+			// We are on first Y
+			else
+			{
+				if (cursor_x > 1){
+					cursor_x -= 1;
+				}
+			}
+
+			delwin(popup.MainPopup_win);
+			draw_func(); 
+			strcpy(*final_input,text_dummy);
+			PopupPrintInside(*final_input, 0);
+			wmove(popup.MainPopup_win,cursor_y,cursor_x);
+
+			wrefresh(popup.MainPopup_win);
+		}
+ 
+		if (user_input == KEY_LEFT){
+			if (cursor_to_word > 0){cursor_to_word -= 1;}
+
+
+			// Check X limitations, based on which Y level we are
+			if (cursor_y > 1){
+				if (cursor_x - 1 < 1){
+					cursor_y -= 1;
+					cursor_x = popup.MainSizeX - 2;
+					wmove(popup.MainPopup_win,cursor_y,cursor_x);
+				}
+				// Free move
+				else{
+					wmove(popup.MainPopup_win,cursor_y,cursor_x-=1);
+				}
+			}
+			// cursor_y = 1
+			else{
+				if (cursor_x > 1){
+					wmove(popup.MainPopup_win,cursor_y,cursor_x-=1);
+				}
+			}
+			wrefresh(popup.MainPopup_win);
+		}
+
+		if (user_input == KEY_RIGHT){
+      if (cursor_to_word < text_len){
+        cursor_to_word += 1;
+        if (cursor_x + 1 > popup.MainSizeX - 2){
+          if (cursor_y < popup.MainSizeY - 1){
+            cursor_x = 1;
+            cursor_y += 1;
+            wmove(popup.MainPopup_win,cursor_y,cursor_x);
+          }
+        }
+        // Free move
+        else{
+          wmove(popup.MainPopup_win,cursor_y,cursor_x += 1);
+        }
+      }
+      wrefresh(popup.MainPopup_win);
+		}
+
+    if (user_input == KEY_RESIZE){
+      clear();
+      getmaxyx(stdscr, stdscrY,stdscrX);
+      
+      int x,y;
+      cursor_x = cursor_y = 1;
+
+      delwin(popup.MainPopup_win);
+      delwin(status_line);
+      //update popup.Main... size and pos values
+      Popup_update_size_and_pos();
+      update_values();
+      draw_files(*fa);
+      refresh();
+      status_line_newwin();
+      draw_status_line();
+			draw_func();
+      PopupPrintInside(*final_input, 0);
+      getyx(popup.MainPopup_win,y,x);
+      for (int i = 0; i < cursor_to_word;i++){
+        if (cursor_x > popup.MainSizeX - 2){
+          cursor_x = 1;
+          // if (cursor_y < MainSizeY - 2){}
+          cursor_y += 1;
+        }
+        cursor_x += 1;
+      }
+      wmove(popup.MainPopup_win,cursor_y,cursor_x); 
+      wrefresh(popup.MainPopup_win);
+    }
+	}
+	curs_set(0);
+	werase(popup.MainPopup_win);
+	wrefresh(popup.MainPopup_win);
+	return confirm;
+}
+
+
+
+
+
+
 void PopupDelete_draw(char *filename){
-  Popup_draw_base(1);
+  int confirm= 1;
+  Popup_draw_base(confirm);
   mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"Delete files?");
-  mvwprintw(popup.MainPopup_win,1,2,"%s",filename);
+  PopupPrintInside(filename,confirm);
   wrefresh(popup.MainPopup_win);
 }
 void PopupCreateFile_draw(){
@@ -359,21 +611,11 @@ void PopupCreateFile_draw(){
   mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"Create new file");
   wrefresh(popup.MainPopup_win);
 }
-
-
-/**/
-/*void PopupRename_draw(char *filename) {*/
-/*    echo();*/
-/*    Popup_draw_base();  // Draws the base popup window*/
-/**/
-/*    char new_filename[NAME_MAX];*/
-/*    strcpy(new_filename, filename); // Copy old filename into the buffer*/
-/*    clear();*/
-/*    mvprintw(0, 0, "New filename: %s", new_filename);*/
-/*    refresh();*/
-/*}*/
-/**/
-
+void PopupRenameFile_draw(){
+	Popup_draw_base(0);
+  mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"Rename files?");
+  wrefresh(popup.MainPopup_win);
+}
 
 
 
@@ -471,38 +713,39 @@ void open_file(char *filename){
   char filecmdresult[64];
   cmdFile(filename,filecmdresult);
   if (strstr(filecmdresult,"text") || strstr(filecmdresult,"empty")){
-    endwin();
-  
-    
-    sigset_t new_mask, old_mask;
-    //block resize signal, so our app wont get crazy
-    sigemptyset(&new_mask);
-    sigaddset(&new_mask, SIGWINCH);
-    sigprocmask(SIG_BLOCK, &new_mask, &old_mask);
+		endwin();
+	
+		
+		sigset_t new_mask, old_mask;
+		//block resize signal, so our app wont get crazy
+		sigemptyset(&new_mask);
+		sigaddset(&new_mask, SIGWINCH);
+		sigprocmask(SIG_BLOCK, &new_mask, &old_mask);
 
 
-    pid_t pid = fork();
-    //spawn new process
-    if (pid == 0){
-      //replace new process with vim or whatever editor user put in argv
-      execlp(editor,editor,filename,NULL);
-      //if execlp failed
-      exit(EXIT_SUCCESS);
-    }else{
-      //parent process
-      int status;
-      //waiting for child process(file editing) to finish
-      waitpid(pid,&status,0);
-    }
-    //restores signal mask, now SIGWINCH can be delivered
-    sigprocmask(SIG_SETMASK, &old_mask, NULL);
+		pid_t pid = fork();
+		//spawn new process
+		if (pid == 0){
+			//replace new process with vim or whatever editor user put in argv
+			execlp(editor,editor,filename,NULL);
+			//if execlp failed
+			exit(EXIT_SUCCESS);
+		}else{
+			//parent process
+			int status;
+			//waiting for child process(file editing) to finish
+			waitpid(pid,&status,0);
+		}
+		//restores signal mask, now SIGWINCH can be delivered
+		sigprocmask(SIG_SETMASK, &old_mask, NULL);
 
-    refresh();
-    clear();
-    init_ncurses();
-    //force send resize signal so our app will process it again after blocking
-    raise(SIGWINCH);  
+		refresh();
+		clear();
+		init_ncurses();
+		//force send resize signal so our app will process it again after blocking
+		raise(SIGWINCH);  
   }
+  
   //if file is not text related or empty
   else{
     pid_t pid;
@@ -555,11 +798,19 @@ FileStatus create_file(char filename[NAME_MAX]){
 }
 
 
-int delete_file(char *filename){
+FileStatus delete_file(char *filename){
   if (remove(filename) != 0){
-    return 1;
+    return ERROR;
   }
-  return 0;
+  return SUCCESS;
+}
+
+FileStatus rename_file(char *old_filename,char *new_filename){
+	if (rename(old_filename,new_filename) == 0){
+		return SUCCESS;
+	}
+	
+	return ERROR;
 }
 
 //for remove_directory func
@@ -573,7 +824,6 @@ int remove_directory(char *path)
 {
   return nftw(path, unlink_cb, 64, FTW_DEPTH | FTW_PHYS);
 }
-
 
 
 void *fzf(char *mode){
@@ -753,6 +1003,11 @@ void handle_user_input(FilesArray *fa,int user_input){
 		case KEY_CREATE_FILE:
 			PopupCreateFile(fa);
 			break;
+		case KEY_RENAME_FILE:
+			if (dirlen > 0){
+        char *filename = fa->filenames[highlight];
+				PopupRenameFile(filename,fa);
+			}
 	
        
     default:
@@ -924,7 +1179,7 @@ void PopupDelete(FilesArray *fa,char *filename){
   PopupDelete_draw(filename);
   Popup_draw_confirm_buttons(0);
 
-  int user_input;
+  int user_input = 1;
   int which_button = 0;
   while(user_input){
     user_input = getch();
@@ -932,7 +1187,8 @@ void PopupDelete(FilesArray *fa,char *filename){
       //Escape button (why is it so slow)
       case 27:
         clear();
-        return;
+
+        break;
   
       //Move to "no"
       case KEY_RIGHT:
@@ -1024,6 +1280,13 @@ void PopupDelete(FilesArray *fa,char *filename){
         clear();
         getmaxyx(stdscr, stdscrY,stdscrX);
         
+        werase(popup.MainPopup_win);
+        wrefresh(popup.MainPopup_win);
+        werase(popup.PopupConfirm_win);
+        wrefresh(popup.PopupConfirm_win);
+
+
+
         delwin(popup.MainPopup_win);
         delwin(popup.PopupConfirm_win);
         delwin(status_line);
@@ -1039,191 +1302,44 @@ void PopupDelete(FilesArray *fa,char *filename){
         break;
     }
   }
+  delwin(popup.MainPopup_win);
+  delwin(popup.PopupConfirm_win);
 }
 void PopupCreateFile(FilesArray *fa){
   PopupCreateFile_draw();
+	int confirm;
+	char *filename = malloc(NAME_MAX);
 
-  curs_set(1);
-  
-	int user_input;
 
-	char filename[NAME_MAX];
-  filename[0] = '\0';
-  int filename_len = 0;
-	
-	int cursor_to_word = 0;
-	int cursor_x=1,cursor_y = 1;
-	wmove(popup.MainPopup_win,cursor_y,cursor_x);
-	wrefresh(popup.MainPopup_win);
+	confirm = PopupInput(NULL,&filename,NAME_MAX,&PopupCreateFile_draw,fa);
 
-	while (true){
-    user_input = getch(); 
-    // Here, do create file
-		if (user_input == '\n'){
-      if(filename_len > 0){
-        create_file(&filename[0]);
-        // PROBLEM variable names do not correspond to what we are doing here
-        show_found_file = 1;
-        strcpy(found_filename,filename);
-      }
-      break;
-
-    }
-    // Here, do not create any file and etc
-		if (user_input == 27){break;}
-
-    
-    if (user_input != 127 && user_input != '\b'&& user_input != KEY_BACKSPACE && user_input != KEY_LEFT && user_input != KEY_RIGHT && user_input != KEY_UP && user_input != KEY_DOWN && user_input != '\t' && user_input != KEY_RESIZE)
+	if (confirm){
+		if (strlen(filename) > 0)
 		{
-      if (filename_len - 1 > NAME_MAX){endwin();printf("2 MUCH CHARS: %d",filename_len);break;}
+		 	create_file(filename);
+		 	show_found_file = 1;
+		 	strcpy(found_filename,filename);
+		}
+	}
 
-      if (cursor_to_word < filename_len){
-        char replaced_char = filename[cursor_to_word];
-        filename[cursor_to_word] = user_input; 
-        for (int i = cursor_to_word + 1; i < filename_len+1;i++){
-          char temp = filename[i];
-          filename[i] = replaced_char;
-          replaced_char = temp;
-        }
-        filename[filename_len += 1] = '\0';
-        cursor_x += 1;
-        if (cursor_x > popup.MainSizeX - 1){
-          if (cursor_y < popup.MainSizeY - 1){
-            cursor_x = 0;
-            cursor_y += 1;
-          }
-        }
-        cursor_to_word += 1;
-      }
-      else{
-        filename[filename_len] = user_input;
-        filename[filename_len+= 1] = '\0';
-        cursor_to_word += 1;
-      }
-      
+	
+	delwin(popup.MainPopup_win);
+	free(filename);
+}
+void PopupRenameFile (char *old_filename,FilesArray *fa){
+	PopupRenameFile_draw();
+	int confirm_rename;
+	char *new_filename= malloc(NAME_MAX);
 
 
-      mvwprintw(popup.MainPopup_win,1,1,"%s",filename);
-      // If cursor was moved to left
-      if (cursor_to_word < filename_len){
-        wmove(popup.MainPopup_win,cursor_y,cursor_x);
-      }
-      else
-      {
-        getyx(popup.MainPopup_win,cursor_y,cursor_x);
-      }
-      wrefresh(popup.MainPopup_win);
+	confirm_rename = PopupInput(old_filename,&new_filename,NAME_MAX,&PopupRenameFile_draw,fa);
+	if (confirm_rename){
+		if (rename_file(old_filename,new_filename) != SUCCESS){
+			Popup_draw_error("Can`t rename this file");
+			getch_wrap();
+		}
+	}
 
-    }
-    if (user_input == '\b' || user_input == KEY_BACKSPACE){
-      for (int i = cursor_to_word - 1;i<filename_len;i++){
-        filename[i] = filename[i+1];
-      }
-      if (cursor_to_word > 0){
-        cursor_to_word -= 1;
-      }
-      if (filename_len > 0){
-        filename_len -= 1;
-        filename[filename_len] = '\0';
-      }
-
-      if (cursor_y > 1){
-        if (cursor_x - 1 < 0){
-          cursor_x = popup.MainSizeX - 1;
-          cursor_y -= 1;
-        }
-        // Free move
-        else{
-          cursor_x -= 1;
-        }
-      }
-      // We are on first Y
-      else
-      {
-        if (cursor_x > 1){
-          cursor_x -= 1;
-        }
-      }
-
-
-      delwin(popup.MainPopup_win);
-      PopupCreateFile_draw();
-      mvwprintw(popup.MainPopup_win,1,1,"%s",filename);
-
-      wmove(popup.MainPopup_win,cursor_y,cursor_x);
-
-      wrefresh(popup.MainPopup_win);
-    }
-
-    if (user_input == KEY_LEFT){
-      if (cursor_to_word > 0){cursor_to_word -= 1;}
-
-
-      // Check X limitations, based on which Y level we are
-      if (cursor_y > 1){
-        if (cursor_x - 1 < 0){
-          cursor_y -= 1;
-          cursor_x = popup.MainSizeX - 1;
-          wmove(popup.MainPopup_win,cursor_y,cursor_x);
-        }
-        // Free move
-        else{
-          wmove(popup.MainPopup_win,cursor_y,cursor_x-=1);
-        }
-      }
-      // cursor_y = 1
-      else{
-        if (cursor_x > 1){
-          wmove(popup.MainPopup_win,cursor_y,cursor_x-=1);
-        }
-      }
-
-     wrefresh(popup.MainPopup_win);
-     
-    }
-    if (user_input == KEY_RIGHT){
-      if (cursor_to_word < filename_len){
-        cursor_to_word += 1;
-        if (cursor_x + 1 > popup.MainSizeX - 1){
-          if (cursor_y < popup.MainSizeY - 1){
-            cursor_x = 0;
-            cursor_y += 1;
-            wmove(popup.MainPopup_win,cursor_y,cursor_x);
-          }
-        }
-        // Free move
-        else{
-          wmove(popup.MainPopup_win,cursor_y,cursor_x += 1);
-        }
-      }
-      wrefresh(popup.MainPopup_win);
-    }
-      
-
-    if (user_input == KEY_RESIZE){
-      clear();
-      getmaxyx(stdscr, stdscrY,stdscrX);
-      
-      delwin(popup.MainPopup_win);
-      delwin(status_line);
-      //update popup.Main... size and pos values
-      Popup_update_size_and_pos();
-      update_values();
-      draw_files(*fa);
-      refresh();
-      status_line_newwin();
-      draw_status_line();
-      PopupCreateFile_draw();
-      mvwprintw(popup.MainPopup_win,1,1,"%s",filename);
-      wmove(popup.MainPopup_win,cursor_y,cursor_x);
-      wrefresh(popup.MainPopup_win);
-      
-
-    }
-  }
-  werase(popup.MainPopup_win);
-  wrefresh(popup.MainPopup_win);
-  delwin(popup.MainPopup_win);
-  
-  curs_set(0);
+	delwin(popup.MainPopup_win);
+  free(new_filename);
 }
