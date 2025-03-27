@@ -87,13 +87,14 @@ typedef enum {
 
 void init_ncurses(){
   initscr();
+	use_default_colors();
   getmaxyx(stdscr, stdscrY, stdscrX);
   curs_set(0);
   noecho();
   keypad(stdscr, true);
   start_color();
-  init_pair(1,COLOR_YELLOW,COLOR_BLACK);
-  init_pair(2,COLOR_RED, COLOR_BLACK);
+  init_pair(1,COLOR_YELLOW,-1);
+  init_pair(2,COLOR_RED, -1);
 }
 
 void opendir_wrap(DIR **dirp,char *path){
@@ -113,12 +114,42 @@ void chdir_wrap(char *path){
 }
 
 
-
-
+void draw_border(WINDOW *w){
+  int left,right,top,bottom,tlc,trc,blc,brc;
+  left = right = ' ';
+  top = 0;
+  bottom = blc =brc = ' ';
+  tlc = trc = blc= brc = ' ';
+  wborder(w,left,right,top,bottom, tlc,trc,blc,brc);
+  wrefresh(w);
+}
 
 void status_line_newwin(){
   status_line = newwin(status_line_height,stdscrX-1,stdscrY - status_line_height,0);
 }
+void draw_status_line(){
+  refresh();
+  draw_border(status_line);
+  // mvprintw(stdscrY-(status_line_height-1),1,"%s",pwd);
+  mvwprintw(status_line,1,2,"%s",pwd);
+  wrefresh(status_line);
+}
+void update_status_line(){
+  werase(status_line);
+  wrefresh(status_line);
+  delwin(status_line);
+  status_line_newwin();
+  draw_status_line();
+}
+
+void clear_screen(){
+  clear();
+  
+  //immediately update status_line, as we try to keep it static, and 
+  //not updating it every main cycle
+  update_status_line();
+}
+
 
 
 
@@ -259,18 +290,15 @@ void FilesArray_new(FilesArray *filesArray){
   FilesArray_sort(filesArray);  
 }
 
-void draw_border(WINDOW *w){
-  int left,right,top,bottom,tlc,trc,blc,brc;
-  left = right = ' ';
-  top = 0;
-  bottom = blc =brc = ' ';
-  tlc = trc = blc= brc = ' ';
-  wborder(w,left,right,top,bottom, tlc,trc,blc,brc);
-  wrefresh(w);
-}
+
 void update_values();
 void draw_files(FilesArray filesArray);
-void draw_status_line();
+
+// Mark
+
+
+
+
 
 
 
@@ -558,21 +586,19 @@ int PopupInput(
 		}
 
     if (user_input == KEY_RESIZE){
-      clear();
+      clear_screen();
       getmaxyx(stdscr, stdscrY,stdscrX);
       
       int x,y;
       cursor_x = cursor_y = 1;
 
       delwin(popup.MainPopup_win);
-      delwin(status_line);
+      
       //update popup.Main... size and pos values
       Popup_update_size_and_pos();
       update_values();
       draw_files(*fa);
       refresh();
-      status_line_newwin();
-      draw_status_line();
 			draw_func();
       PopupPrintInside(*final_input, 0);
       getyx(popup.MainPopup_win,y,x);
@@ -589,6 +615,7 @@ int PopupInput(
     }
 	}
 	curs_set(0);
+  refresh();
 	werase(popup.MainPopup_win);
 	wrefresh(popup.MainPopup_win);
 	return confirm;
@@ -619,11 +646,6 @@ void PopupRenameFile_draw(){
 
 
 
-void clear_and_recreate(){
-  clear();
-  werase(status_line);
-  status_line_newwin();
-}
 
 void update_values(){
   getmaxyx(stdscr, stdscrY, stdscrX);
@@ -676,7 +698,7 @@ void resize_event(){
       highlight = last_visible_file_index;
     }
   }
-  clear_and_recreate();
+  clear_screen();
 }
 
 //Getch wrap to hold unexpected resize signal
@@ -740,7 +762,7 @@ void open_file(char *filename){
 		sigprocmask(SIG_SETMASK, &old_mask, NULL);
 
 		refresh();
-		clear();
+		clear_screen();
 		init_ncurses();
 		//force send resize signal so our app will process it again after blocking
 		raise(SIGWINCH);  
@@ -920,8 +942,9 @@ void handle_user_input(FilesArray *fa,int user_input){
         dont_draw_file_index = -1;
 
         update_last_mtime();
+        update_values();
 
-        clear_and_recreate();
+        clear_screen();
       }
       break;
     //selected file
@@ -934,8 +957,11 @@ void handle_user_input(FilesArray *fa,int user_input){
 
         //if current item(file) is a directory, than chdir
         if (is_dir(filename)){
-          clear_and_recreate();
           chdir(filename);
+          //updating current directory
+          update_values();
+
+          clear_screen();
 
           FilesArray_free(fa);
           FilesArray_new(fa);
@@ -946,8 +972,6 @@ void handle_user_input(FilesArray *fa,int user_input){
           //just to update last_mtime for new directory
           //to not compare with old last_mtime for previous directory
           update_last_mtime();
-
-          // clear_and_recreate();
         }
         //FILE
         else{
@@ -968,7 +992,8 @@ void handle_user_input(FilesArray *fa,int user_input){
         int third_input = getch_wrap();
         //"fcd" - fast change directory
         if (third_input == 'd'){
-          clear_and_recreate();
+          clear_screen();
+
 
           fzf("DIRS");
 
@@ -1093,7 +1118,7 @@ void draw_files(FilesArray filesArray){
           highlight = i;
           dont_draw_file_index = i - (stdscrY - 4);
           nodelay(stdscr,true);
-          clear();
+          clear_screen();
         }      
       }
   
@@ -1111,7 +1136,7 @@ void draw_files(FilesArray filesArray){
           show_previous_path = 0;
           //To ingore getch() in current iteration, so we can straight jump into new draw_files() function with new dont_draw_file_index
           nodelay(stdscr,true);
-          clear(); //just in case (works)
+          clear_screen(); //just in case (works)
         }
       }
 
@@ -1121,12 +1146,6 @@ void draw_files(FilesArray filesArray){
 }
 
 
-void draw_status_line(){
-  refresh();
-  // box(status_line,0,0);
-  draw_border(status_line);
-  mvprintw(stdscrY-(status_line_height-1),1,"%s",pwd);
-}
 
 
 int main(int argc,char **argv){
@@ -1143,6 +1162,7 @@ int main(int argc,char **argv){
 
   int user_input;
 
+  draw_status_line(); 
   // Main loop 
   while (user_input != 'q'){
     if (dir_have_changes()){
@@ -1156,13 +1176,13 @@ int main(int argc,char **argv){
         highlight = dirlen - 1;
       }
       //clear so we can draw new changes in directory
-      clear();
+      clear_screen();
     }
     //getting X,Y to draw files correctly
     getmaxyx(stdscr, stdscrY, stdscrX);
     update_values();
     draw_files(filesArray);
-    draw_status_line();
+    /* draw_status_line(); */
 
     user_input = getch_wrap();
     handle_user_input(&filesArray,user_input);
@@ -1186,7 +1206,7 @@ void PopupDelete(FilesArray *fa,char *filename){
     switch (user_input) {
       //Escape button (why is it so slow)
       case 27:
-        clear();
+        clear_screen();
 
         break;
   
@@ -1254,7 +1274,7 @@ void PopupDelete(FilesArray *fa,char *filename){
           }
 
           
-          clear();
+          clear_screen();
           delwin(popup.MainPopup_win);          
           delwin(popup.PopupConfirm_win);
           FilesArray_free(fa);
@@ -1277,7 +1297,8 @@ void PopupDelete(FilesArray *fa,char *filename){
 
 
       case KEY_RESIZE:
-        clear();
+        update_values();
+        clear_screen();
         getmaxyx(stdscr, stdscrY,stdscrX);
         
         werase(popup.MainPopup_win);
@@ -1289,14 +1310,10 @@ void PopupDelete(FilesArray *fa,char *filename){
 
         delwin(popup.MainPopup_win);
         delwin(popup.PopupConfirm_win);
-        delwin(status_line);
         //update popup.Main... size and pos values
         Popup_update_size_and_pos();
-        update_values();
         draw_files(*fa);
         refresh();
-        status_line_newwin();
-        draw_status_line();
         PopupDelete_draw(filename);
         Popup_draw_confirm_buttons(which_button);
         break;
@@ -1309,6 +1326,11 @@ void PopupCreateFile(FilesArray *fa){
   PopupCreateFile_draw();
 	int confirm;
 	char *filename = malloc(NAME_MAX);
+  if (filename == NULL){
+    endwin();
+    printf("Memory allocation failed: filename for PopupCreateFile");
+    exit(1);
+  }
 
 
 	confirm = PopupInput(NULL,&filename,NAME_MAX,&PopupCreateFile_draw,fa);
@@ -1330,6 +1352,11 @@ void PopupRenameFile (char *old_filename,FilesArray *fa){
 	PopupRenameFile_draw();
 	int confirm_rename;
 	char *new_filename= malloc(NAME_MAX);
+  if (new_filename == NULL){
+    endwin();
+    printf("Memory allocation failed: new_filename for PopupRenameFile");
+    exit(1);
+  }
 
 
 	confirm_rename = PopupInput(old_filename,&new_filename,NAME_MAX,&PopupRenameFile_draw,fa);
@@ -1340,6 +1367,8 @@ void PopupRenameFile (char *old_filename,FilesArray *fa){
 		}
 	}
 
+  werase(popup.MainPopup_win);
+  wrefresh(popup.MainPopup_win);
 	delwin(popup.MainPopup_win);
   free(new_filename);
 }
