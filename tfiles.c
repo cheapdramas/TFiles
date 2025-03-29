@@ -46,6 +46,8 @@ typedef struct{
 
   WINDOW *PopupConfirm_win;
   int ConfirmSizeX,ConfirmSizeY,ConfirmStartY,ConfirmStartX;
+
+  int last_used_y;
 }Popup;
 
 
@@ -78,10 +80,12 @@ char *editor = NULL;
 
 typedef enum {
   SUCCESS = 0,
-  ERROR = 1,
-  FILE_EXISTS = 2
-}FileStatus;
+  ERROR = 1
+}OperationStatus;
 
+typedef struct{
+  off_t file_size;
+}FileInfo;
 
 
 
@@ -294,7 +298,6 @@ void FilesArray_new(FilesArray *filesArray){
 void update_values();
 void draw_files(FilesArray filesArray);
 
-// Mark
 
 
 
@@ -307,6 +310,7 @@ Popup popup;
 void PopupDelete(FilesArray *fa,char *filename);
 void PopupRenameFile(char *filename,FilesArray *fa);
 void PopupCreateFile(FilesArray *fa);
+void PopupFileInfo(char *filename);
 
 void Popup_update_size_and_pos(){
   popup.MainSizeY = 13;
@@ -384,27 +388,40 @@ void Popup_draw_base(int draw_confirm){
 	}
 }
 
-void PopupPrintInside(char *text,int consider_confirm){
-  int y = 1;
-  int x = 1;
-  char *old_text= text;
-  if (!consider_confirm){
-    popup.ConfirmSizeY = 0;
-  }
-  for (int i = 0;old_text[i] != '\0';i++){
-    // if (y < popup.MainSizeY - popup.ConfirmSizeY - 2 + consider_confirm){
-    //Out of border
-    if (x > popup.MainSizeX - 2){
-      x=1;
-      y+=1;
-      if (y > popup.MainSizeY - 2){return;}
+void PopupTitle(char *title){
+  mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"%s",title);
+  wrefresh(popup.MainPopup_win);
+};
+void PopupPrintInside(char *text,int consider_confirm,int replace_old_text){
+  if (replace_old_text == 1){
+    int y = 1;
+    int x = 1;
+    char *old_text= text;
+    if (!consider_confirm){
+      popup.ConfirmSizeY = 0;
     }
-    wchar_t wc;        
-    mbtowc(&wc, text, MB_CUR_MAX);
-    mvwprintw(popup.MainPopup_win, y, x, "%lc", wc);  // Print first character
-    text+=1;
-    x+=1;
+    for (int i = 0;old_text[i] != '\0';i++){
+      // if (y < popup.MainSizeY - popup.ConfirmSizeY - 2 + consider_confirm){
+      //Out of border
+      if (x > popup.MainSizeX - 2){
+        x=1;
+        y+=1;
+        if (y > popup.MainSizeY - 2){return;}
+      }
+      wchar_t wc;        
+      mbtowc(&wc, text, MB_CUR_MAX);
+      mvwprintw(popup.MainPopup_win, y, x, "%lc", wc);  // Print first character
+      text+=1;
+      x+=1;
+    }
   }
+  else{
+    popup.last_used_y += 1; 
+    wmove(popup.MainPopup_win,popup.last_used_y,1);
+    wprintw(popup.MainPopup_win,"%s",text);
+  }
+  
+  wrefresh(popup.MainPopup_win);
 }
 
 
@@ -433,7 +450,7 @@ int PopupInput(
 		cursor_to_word = text_len;
     strcpy(text_dummy,input_from_start);
 		// This will set our cursor into the last character of input_from_start
-		PopupPrintInside(text_dummy,0);
+		PopupPrintInside(text_dummy,0,1);
     
 		// Updating cursor position
 		getyx(popup.MainPopup_win,cursor_y,cursor_x);
@@ -489,7 +506,7 @@ int PopupInput(
 
 
         strcpy(*final_input,text_dummy);
-        PopupPrintInside(*final_input,0);
+        PopupPrintInside(*final_input,0,1);
 
 				if (cursor_to_word < text_len){
 					wmove(popup.MainPopup_win,cursor_y,cursor_x);
@@ -536,7 +553,7 @@ int PopupInput(
 			delwin(popup.MainPopup_win);
 			draw_func(); 
 			strcpy(*final_input,text_dummy);
-			PopupPrintInside(*final_input, 0);
+			PopupPrintInside(*final_input, 0,1);
 			wmove(popup.MainPopup_win,cursor_y,cursor_x);
 
 			wrefresh(popup.MainPopup_win);
@@ -600,7 +617,7 @@ int PopupInput(
       draw_files(*fa);
       refresh();
 			draw_func();
-      PopupPrintInside(*final_input, 0);
+      PopupPrintInside(*final_input, 0,1);
       getyx(popup.MainPopup_win,y,x);
       for (int i = 0; i < cursor_to_word;i++){
         if (cursor_x > popup.MainSizeX - 2){
@@ -629,19 +646,41 @@ int PopupInput(
 void PopupDelete_draw(char *filename){
   int confirm= 1;
   Popup_draw_base(confirm);
-  mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"Delete files?");
-  PopupPrintInside(filename,confirm);
-  wrefresh(popup.MainPopup_win);
+  // mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"Delete files?");
+  PopupTitle("Delete files?");
+  PopupPrintInside(filename,confirm,1);
 }
 void PopupCreateFile_draw(){
 	Popup_draw_base(0);
-  mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"Create new file");
-  wrefresh(popup.MainPopup_win);
+  PopupTitle("Create new file");
 }
 void PopupRenameFile_draw(){
 	Popup_draw_base(0);
-  mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"Rename files?");
-  wrefresh(popup.MainPopup_win);
+  PopupTitle("Rename files?");
+}
+void PopupFileInfo_draw(char *filename,char *file_size){
+  //Mark
+	Popup_draw_base(0);
+  int confirm = 0;
+  int replace_old_text = 0;
+  PopupTitle(filename);
+ 
+  int sizeof_show_file_size = strlen("File Size: ") + strlen(file_size) + 2;
+  char *show_file_size = malloc(sizeof_show_file_size);
+  if (show_file_size == NULL){
+    endwin();
+    printf("Memory allocation failed");
+    exit(1);
+  }
+  snprintf(show_file_size,sizeof_show_file_size,"%s%s","File Size: ",file_size);
+  PopupPrintInside(show_file_size, confirm, replace_old_text);
+  free(show_file_size);
+
+
+
+
+
+  popup.last_used_y = 0;
 }
 
 
@@ -783,7 +822,7 @@ void open_file(char *filename){
   }
 }
 
-FileStatus create_file(char filename[NAME_MAX]){
+OperationStatus create_file(char filename[NAME_MAX]){
   int filename_len = strlen(filename);
   if (filename[filename_len- 1] == '/'){
     filename[filename_len - 1] = '\0';
@@ -804,7 +843,7 @@ FileStatus create_file(char filename[NAME_MAX]){
 
     // If file exists
     if (stat(filename,&buffer) == 0){
-      return FILE_EXISTS;
+      return ERROR;
     }
     // Try to create file
     FILE *file =fopen(filename,"w");
@@ -820,20 +859,34 @@ FileStatus create_file(char filename[NAME_MAX]){
 }
 
 
-FileStatus delete_file(char *filename){
+OperationStatus delete_file(char *filename){
   if (remove(filename) != 0){
     return ERROR;
   }
   return SUCCESS;
 }
 
-FileStatus rename_file(char *old_filename,char *new_filename){
+OperationStatus rename_file(char *old_filename,char *new_filename){
 	if (rename(old_filename,new_filename) == 0){
 		return SUCCESS;
 	}
 	
 	return ERROR;
 }
+
+OperationStatus get_file_info(char *path,FileInfo *file_info){
+  struct stat file_stat;
+
+  if (stat(path,&file_stat) < 0){
+    return ERROR;
+  }
+
+  file_info->file_size = file_stat.st_size;
+  
+  return SUCCESS; 
+}
+
+
 
 //for remove_directory func
 int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf){
@@ -890,7 +943,6 @@ void *fzf(char *mode){
 		raise(SIGWINCH);
 
   }
-  
   init_ncurses();
 }
 
@@ -1033,6 +1085,16 @@ void handle_user_input(FilesArray *fa,int user_input){
         char *filename = fa->filenames[highlight];
 				PopupRenameFile(filename,fa);
 			}
+    case KEY_FILE_INFO:
+      //test environment
+      if (dirlen > 0){
+        char *filename = fa->filenames[highlight];
+        PopupFileInfo(filename);
+      }
+
+
+      break;
+      
 	
        
     default:
@@ -1371,4 +1433,30 @@ void PopupRenameFile (char *old_filename,FilesArray *fa){
   wrefresh(popup.MainPopup_win);
 	delwin(popup.MainPopup_win);
   free(new_filename);
+}
+
+void PopupFileInfo(char *filename){
+  FileInfo file_info;
+  char fullpath[PATH_MAX];
+  snprintf(fullpath, strlen(pwd) + strlen(filename) + 2, "%s/%s", pwd,filename);
+  
+
+
+  if (get_file_info(fullpath,&file_info) != ERROR){
+    off_t file_size = file_info.file_size; 
+
+    char *file_size_str = malloc(file_size%10);
+    snprintf(file_size_str,(file_size%10) + 2, "%ld", file_size);
+
+    PopupFileInfo_draw(
+      filename,
+      file_size_str
+    );
+    getch_wrap();
+
+  }else{
+    endwin();
+    exit(1);
+  }
+
 }
