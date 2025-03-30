@@ -659,7 +659,6 @@ void PopupRenameFile_draw(){
   PopupTitle("Rename files?");
 }
 void PopupFileInfo_draw(char *filename,char *file_size){
-  //Mark
 	Popup_draw_base(0);
   int confirm = 0;
   int replace_old_text = 0;
@@ -675,11 +674,6 @@ void PopupFileInfo_draw(char *filename,char *file_size){
   snprintf(show_file_size,sizeof_show_file_size,"%s%s","File Size: ",file_size);
   PopupPrintInside(show_file_size, confirm, replace_old_text);
   free(show_file_size);
-
-
-
-
-
   popup.last_used_y = 0;
 }
 
@@ -752,28 +746,27 @@ int getch_wrap(){
 
 
 //calls 'file <filename>' to get file info and writes it to filecmdresult
-void cmdFile(char *filename,char filecmdresult[64]){
-  int size_cmd = strlen(filename) + 6;
+void cmdFile(char *filename,char cmdFile_result[64]){
+  //file command example:
+  //     hello.txt: inode/x-empty; charset=binary
+  int size_cmd = strlen(filename) + 9;
   char cmd[size_cmd];
-  snprintf(cmd,size_cmd,"file %s",filename);
+  snprintf(cmd,size_cmd,"file -i %s",filename);
   FILE *stream;
   if ( (stream = popen(cmd,"r")) ){
-    fgets(filecmdresult,64,stream);
+    fgets(cmdFile_result,64,stream);
   }
   pclose(stream);
 }
 
 
 
-
-
-
 // /If <filename> type is a text like, open it in current terminal session (vim or whatever)
 //Else: let the xdg-open command work
 void open_file(char *filename){
-  char filecmdresult[64];
-  cmdFile(filename,filecmdresult);
-  if (strstr(filecmdresult,"text") || strstr(filecmdresult,"empty")){
+  char cmdFile_result[64];
+  cmdFile(filename,cmdFile_result);
+  if (strstr(cmdFile_result,"text") || strstr(cmdFile_result,"empty")){
 		endwin();
 	
 		
@@ -817,7 +810,7 @@ void open_file(char *filename){
       int null_fd = open("/dev/null",O_WRONLY);
       dup2(null_fd,2);
       //replaces process with xdg-open 
-      execlp("xdg-open","xdg-open",filename,NULL); 
+      execlp(FILE_OPENER,FILE_OPENER,filename,NULL); 
     }
   }
 }
@@ -874,6 +867,53 @@ OperationStatus rename_file(char *old_filename,char *new_filename){
 	return ERROR;
 }
 
+
+long get_dir_size(const char *path){
+  struct dirent *entry;
+  struct stat entry_stat;
+  long total_size = 0; 
+  DIR *dp = opendir(path);
+
+  if (dp == NULL){
+    return -1; //Return an error code
+  }
+
+  while ((entry = readdir(dp)) != NULL){
+    // Skip "." and ".."   
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) { 
+      continue; 
+    } 
+    //Get the full path of the entry
+    char fullpath[PATH_MAX];
+    snprintf(fullpath,sizeof(fullpath),"%s/%s",path,entry->d_name);
+
+    //Get the file status
+    if (stat(fullpath, &entry_stat) == -1){
+      perror("stat");
+      continue; //Skip, if error
+    }
+
+    //If it`s directory, recurse into it
+    if (S_ISDIR(entry_stat.st_mode)){
+      long dir_size = get_dir_size(fullpath);
+    
+      //Successfuly got directory size
+      if (dir_size != -1) {
+        total_size += dir_size;
+        //Adding the block size of directory
+        total_size += entry_stat.st_size;
+      }
+    } else{
+      //Add the size of the file
+      total_size += entry_stat.st_size;
+      
+    }
+  }
+  closedir(dp);
+  return total_size;
+}
+
+
 OperationStatus get_file_info(char *path,FileInfo *file_info){
   struct stat file_stat;
 
@@ -881,7 +921,13 @@ OperationStatus get_file_info(char *path,FileInfo *file_info){
     return ERROR;
   }
 
-  file_info->file_size = file_stat.st_size;
+  if (is_dir(path) == true){
+    long dir_size = get_dir_size(path);
+    file_info->file_size = dir_size;
+  }
+  else{
+    file_info->file_size = file_stat.st_size;
+  }
   
   return SUCCESS; 
 }
@@ -1441,22 +1487,28 @@ void PopupFileInfo(char *filename){
   snprintf(fullpath, strlen(pwd) + strlen(filename) + 2, "%s/%s", pwd,filename);
   
 
+  if (get_file_info(fullpath,&file_info) == ERROR){return;}
 
-  if (get_file_info(fullpath,&file_info) != ERROR){
-    off_t file_size = file_info.file_size; 
 
-    char *file_size_str = malloc(file_size%10);
-    snprintf(file_size_str,(file_size%10) + 2, "%ld", file_size);
 
-    PopupFileInfo_draw(
-      filename,
-      file_size_str
-    );
-    getch_wrap();
-
-  }else{
+  char *file_size_str = malloc( (file_info.file_size%10) + 2 );
+  if (file_size_str == NULL){
     endwin();
+    printf("Memory allocation failed");
     exit(1);
   }
+  snprintf(file_size_str,sizeof(file_size_str), "%ld", file_info.file_size);
 
+
+
+
+  PopupFileInfo_draw(
+    filename,
+    file_size_str
+  );
+  free(file_size_str);
+  getch_wrap();
+  werase(popup.MainPopup_win);
+  wrefresh(popup.MainPopup_win);
+  delwin(popup.MainPopup_win);
 }
