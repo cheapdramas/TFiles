@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-// #include <ncurses.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <string.h>
@@ -49,165 +48,12 @@ typedef struct{
 
   int last_used_y;
 }Popup;
-
-
-
-
-//Minus one because we want to display all of the files at the start
-int dont_draw_file_index = -1; 
-int last_visible_file_index;
-int first_visible_file_index;
-
-//To prevent blocking highlight variable in loop, so it doesn`t get stuck only on previous_path and could go on
-//If we showed previous_path, move highlight, and turn this to 0 so it won`t stuck
-//If we cd .. than this is again 1
-int show_previous_path = 1;
-
-//fzf
-//flag for fzf and draw_files funcs
-//in fzf we found file and put this flag to 1
-//in draw_files in flag is 1 we search for that file and put highlight on it
-//after we displayed file = flag is 0 again
-int show_found_file= 0;
-char found_filename[NAME_MAX];
-char found_dir[PATH_MAX];
-
-time_t last_mtime = 0;
-
-
-char *editor = NULL;
-
-
-typedef enum {
-  SUCCESS = 0,
-  ERROR = 1
-}OperationStatus;
-
-typedef struct{
-  off_t file_size;
-}FileInfo;
-
-
-
-void init_ncurses(){
-  initscr();
-	use_default_colors();
-  getmaxyx(stdscr, stdscrY, stdscrX);
-  curs_set(0);
-  noecho();
-  keypad(stdscr, true);
-  start_color();
-  init_pair(1,COLOR_YELLOW,-1);
-  init_pair(2,COLOR_RED, -1);
-}
-
-void opendir_wrap(DIR **dirp,char *path){
-  *dirp = opendir(path);
-  if (*dirp == NULL){
-    endwin();
-    perror("Unable to open this directory");
-    exit(1);
-  }
-}
-void chdir_wrap(char *path){
-  if (  (chdir(path)) != 0){
-    endwin();
-    perror("Unable to change directory");
-    exit(EXIT_SUCCESS);
-  }
-}
-
-
-void draw_border(WINDOW *w){
-  int left,right,top,bottom,tlc,trc,blc,brc;
-  left = right = ' ';
-  top = 0;
-  bottom = blc =brc = ' ';
-  tlc = trc = blc= brc = ' ';
-  wborder(w,left,right,top,bottom, tlc,trc,blc,brc);
-  wrefresh(w);
-}
-
-void status_line_newwin(){
-  status_line = newwin(status_line_height,stdscrX-1,stdscrY - status_line_height,0);
-}
-void draw_status_line(){
-  refresh();
-  draw_border(status_line);
-  // mvprintw(stdscrY-(status_line_height-1),1,"%s",pwd);
-  mvwprintw(status_line,1,2,"%s",pwd);
-  wrefresh(status_line);
-}
-void update_status_line(){
-  werase(status_line);
-  wrefresh(status_line);
-  delwin(status_line);
-  status_line_newwin();
-  draw_status_line();
-}
-
-void clear_screen(){
-  clear();
-  
-  //immediately update status_line, as we try to keep it static, and 
-  //not updating it every main cycle
-  update_status_line();
-}
-
-
-
-
-void init(int argc,char **argv){
-  //argv[0] = always program name
-  //argv[1] = must be a start path
-  
-  if ((editor = getenv("EDITOR")) == NULL){
-    editor = "vim";
-  }
-
-  if (argc >=  2){
-    //start iterating through arguments 
-    for (int i = 1;i < argc;i++){
-      char *argument = argv[i];
-
-      //if we found "-path" argument
-      if (strcmp(argument,"-path") == 0){
-        if (i + 1 <= argc - 1){
-          //Changing directory
-          chdir_wrap(argv[i+1]); 
-        }
-      }
-
-      
-      //if we found "-editor" argument
-      if (strcmp(argument,"-editor") == 0){
-        //We make sure that we have our next argument as editor name
-        //i + 1 as next index from editor
-        //argc - 1 as we comparing indexes(start from 0)
-        if (i + 1<= argc - 1){
-          editor = argv[i+1];
-        }
-        else
-        {
-          endwin();
-          printf("Bad argument(editor)! Make sure to provide editor name after '-editor' argument \n");
-          exit(1);
-        }
-      }
-    }
-  }
-
-  // initializing an status_line
-  getcwd(pwd,sizeof(pwd));
-  status_line_newwin(); 
-}
-
+Popup popup;
 typedef struct {
   char ** filenames;
   size_t size;
   size_t last_used_index;
 }FilesArray;
-
 
 void FilesArray_init(FilesArray *fa,int start_size){
   fa->filenames = malloc(start_size * sizeof(char *));
@@ -286,13 +132,428 @@ void FilesArray_sort(FilesArray *fa) {
   qsort(fa->filenames, dirlen, sizeof(char *), compare_filenames);
 }
 
-//sort filename order by name O(n²)
-
 void FilesArray_new(FilesArray *filesArray){
   FilesArray_init(filesArray,1);
   FilesArray_fill(filesArray);
   FilesArray_sort(filesArray);  
 }
+
+//Minus one because we want to display all of the files at the start
+int dont_draw_file_index = -1; 
+int last_visible_file_index;
+int first_visible_file_index;
+
+//To prevent blocking highlight variable in loop, so it doesn`t get stuck only on previous_path and could go on
+//If we showed previous_path, move highlight, and turn this to 0 so it won`t stuck
+//If we cd .. than this is again 1
+int show_previous_path = 1;
+
+//fzf
+//flag for fzf and draw_files funcs
+//in fzf we found file and put this flag to 1
+//in draw_files in flag is 1 we search for that file and put highlight on it
+//after we displayed file = flag is 0 again
+int show_found_file= 0;
+char found_filename[NAME_MAX];
+char found_dir[PATH_MAX];
+
+time_t last_mtime = 0;
+
+
+char *editor = NULL;
+
+
+typedef enum {
+  SUCCESS = 0,
+  ERROR = 1
+}OperationStatus;
+
+typedef struct{
+  off_t file_size;
+  bool is_regular;   //true = regular;false=directory or smth else
+}FileInfo;
+
+
+
+void init_ncurses(){
+  initscr();
+	use_default_colors();
+  getmaxyx(stdscr, stdscrY, stdscrX);
+  curs_set(0);
+  noecho();
+  keypad(stdscr, true);
+  start_color();
+  init_pair(1,COLOR_YELLOW,-1);
+  init_pair(2,COLOR_RED, -1);
+}
+
+void opendir_wrap(DIR **dirp,char *path){
+  *dirp = opendir(path);
+  if (*dirp == NULL){
+    endwin();
+    perror("Unable to open this directory");
+    exit(1);
+  }
+}
+void chdir_wrap(char *path){
+  if (  (chdir(path)) != 0){
+    endwin();
+    perror("Unable to change directory");
+    exit(EXIT_SUCCESS);
+  }
+}
+
+//calls 'file <filename>' to get file info and writes it to filecmdresult
+void cmdFile(char *filename,char cmdFile_result[64]){
+  //file command example:
+  //     hello.txt: inode/x-empty; charset=binary
+  int size_cmd = strlen(filename) + 9;
+  char cmd[size_cmd];
+  snprintf(cmd,size_cmd,"file -i %s",filename);
+  FILE *stream;
+  if ( (stream = popen(cmd,"r")) ){
+    fgets(cmdFile_result,64,stream);
+  }
+  pclose(stream);
+}
+
+
+
+
+OperationStatus create_file(char filename[NAME_MAX]){
+  int filename_len = strlen(filename);
+  if (filename[filename_len- 1] == '/'){
+    filename[filename_len - 1] = '\0';
+
+
+
+    if (mkdir(filename, 0755) == 0) {
+      return SUCCESS;
+    } 
+    else {
+      return ERROR;
+    }
+  }
+
+  else
+  {
+    struct stat buffer;
+
+    // If file exists
+    if (stat(filename,&buffer) == 0){
+      return ERROR;
+    }
+    // Try to create file
+    FILE *file =fopen(filename,"w");
+    // Error appiered
+    if (!file){
+      return ERROR;
+    }
+
+
+    fclose(file);
+    return SUCCESS;
+  }
+}
+
+
+OperationStatus delete_file(char *filename){
+  if (remove(filename) != 0){
+    return ERROR;
+  }
+  return SUCCESS;
+}
+
+OperationStatus rename_file(char *old_filename,char *new_filename){
+	if (rename(old_filename,new_filename) == 0){
+		return SUCCESS;
+	}
+	
+	return ERROR;
+}
+
+void file_size_format(off_t size, char *buf, size_t buf_size) {
+  const char *units[] = { "B", "KB", "MB", "GB", "TB", "PB" };
+  int unit = 0;
+
+  double display_size = size; // Important! float division for smooth values
+
+  while (display_size >= 1000 && unit < 5) {
+    display_size /= 1000;
+    unit++;
+  }
+
+  snprintf(buf, buf_size, "%.1f %s", display_size, units[unit]);
+}
+
+
+bool is_dir(char *filename){
+  struct stat file_stat;
+  if (stat(filename,&file_stat) != 0){
+    return false;
+  }
+  return S_ISDIR(file_stat.st_mode);
+}
+
+
+
+
+
+
+
+//for remove_directory func
+int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf){
+  int rv = remove(fpath);
+
+  return rv;
+}
+
+int remove_directory(char *path)
+{
+  return nftw(path, unlink_cb, 64, FTW_DEPTH | FTW_PHYS);
+}
+
+
+
+void draw_border(WINDOW *w){
+  int left,right,top,bottom,tlc,trc,blc,brc;
+  left = right = ' ';
+  top = 0;
+  bottom = blc =brc = ' ';
+  tlc = trc = blc= brc = ' ';
+  wborder(w,left,right,top,bottom, tlc,trc,blc,brc);
+  wrefresh(w);
+}
+
+void status_line_newwin(){
+  status_line = newwin(status_line_height,stdscrX-1,stdscrY - status_line_height,0);
+}
+void draw_status_line(){
+  refresh();
+  draw_border(status_line);
+  // mvprintw(stdscrY-(status_line_height-1),1,"%s",pwd);
+  mvwprintw(status_line,1,2,"%s",pwd);
+  wrefresh(status_line);
+}
+void update_status_line(){
+  werase(status_line);
+  wrefresh(status_line);
+  delwin(status_line);
+  status_line_newwin();
+  draw_status_line();
+}
+
+void clear_screen(){
+  clear();
+  
+  //immediately update status_line, as we try to keep it static, and 
+  //not updating it every main cycle
+  update_status_line();
+}
+
+
+void update_values(){
+  getmaxyx(stdscr, stdscrY, stdscrX);
+  last_visible_file_index = stdscrY- status_line_height + dont_draw_file_index - 1;
+  getcwd(pwd,sizeof(pwd));
+  first_visible_file_index = dont_draw_file_index;
+}
+
+void resize_event(){
+  // updating values (for new screen size)
+  update_values();
+  //if highlight is trying to get out of a user view
+  if (highlight > last_visible_file_index){
+    if (last_visible_file_index >= 0){
+      highlight = last_visible_file_index;
+    }
+  }
+  clear_screen();
+}
+
+//Getch wrap to hold unexpected resize signal
+int getch_wrap(WINDOW*w){
+  int input = wgetch(w);
+  if (input == KEY_RESIZE){
+    resize_event();
+  }  
+
+  return input;
+}
+
+
+off_t get_dir_size(const char *path){
+  struct dirent *entry;
+  struct stat entry_stat;
+  DIR *dp = opendir(path);
+  if (dp == NULL){
+    return ERROR; 
+  }
+
+  off_t total_size= 0;
+
+  while ((entry = readdir(dp)) != NULL){
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) { 
+      continue; 
+    } 
+
+    char fullpath[PATH_MAX];
+    snprintf(fullpath,sizeof(fullpath),"%s/%s",path,entry->d_name);
+
+    if (lstat(fullpath, &entry_stat) < 0){
+      continue; 
+    }
+
+    if (S_ISDIR(entry_stat.st_mode)){
+      get_dir_size(fullpath); // just recurse, no adding return value
+    } else {
+      total_size+= entry_stat.st_size; // add file size
+    }
+  }
+  
+  closedir(dp);
+  return total_size;
+}
+
+
+
+
+off_t get_file_size(char *path){
+  struct stat file_stat;
+  if (stat(path,&file_stat) < 0){
+    return -1;
+  }
+  if (is_dir(path) == true){
+    return get_dir_size(path);
+  }
+  return file_stat.st_size;
+}
+
+
+OperationStatus get_file_info(char *path,FileInfo *file_info){
+  struct stat file_stat;
+  if (stat(path,&file_stat) < 0){
+    return ERROR;
+  }
+  // Is file regular?
+  file_info->is_regular = true;
+  if (S_ISDIR(file_stat.st_mode) == 1){
+    file_info->is_regular = false;
+  }
+
+
+  return SUCCESS;
+}
+
+
+
+
+
+
+
+// /If <filename> type is a text like, open it in current terminal session (vim or whatever)
+//Else: let the xdg-open command work
+void open_file(char *filename){
+  char cmdFile_result[64];
+  cmdFile(filename,cmdFile_result);
+  if (strstr(cmdFile_result,"text") || strstr(cmdFile_result,"empty")){
+		endwin();
+	
+		
+		sigset_t new_mask, old_mask;
+		//block resize signal, so our app wont get crazy
+		sigemptyset(&new_mask);
+		sigaddset(&new_mask, SIGWINCH);
+		sigprocmask(SIG_BLOCK, &new_mask, &old_mask);
+
+
+		pid_t pid = fork();
+		//spawn new process
+		if (pid == 0){
+			//replace new process with vim or whatever editor user put in argv
+			execlp(editor,editor,filename,NULL);
+			//if execlp failed
+			exit(EXIT_SUCCESS);
+		}else{
+			//parent process
+			int status;
+			//waiting for child process(file editing) to finish
+			waitpid(pid,&status,0);
+		}
+		//restores signal mask, now SIGWINCH can be delivered
+		sigprocmask(SIG_SETMASK, &old_mask, NULL);
+
+		refresh();
+		clear_screen();
+		init_ncurses();
+		//force send resize signal so our app will process it again after blocking
+		raise(SIGWINCH);  
+  }
+  
+  //if file is not text related or empty
+  else{
+    pid_t pid;
+    //spawning new process
+    pid = fork();
+    if (pid == 0){
+      //change stdout descriptor so we wont get any warning and shit from xdg-open
+      int null_fd = open("/dev/null",O_WRONLY);
+      dup2(null_fd,2);
+      //replaces process with xdg-open 
+      execlp(FILE_OPENER,FILE_OPENER,filename,NULL); 
+    }
+  }
+}
+
+
+
+void init(int argc,char **argv){
+  //argv[0] = always program name
+  //argv[1] = must be a start path
+  
+  if ((editor = getenv("EDITOR")) == NULL){
+    editor = "vim";
+  }
+
+  if (argc >=  2){
+    //start iterating through arguments 
+    for (int i = 1;i < argc;i++){
+      char *argument = argv[i];
+
+      //if we found "-path" argument
+      if (strcmp(argument,"-path") == 0){
+        if (i + 1 <= argc - 1){
+          //Changing directory
+          chdir_wrap(argv[i+1]); 
+        }
+      }
+
+      
+      //if we found "-editor" argument
+      if (strcmp(argument,"-editor") == 0){
+        //We make sure that we have our next argument as editor name
+        //i + 1 as next index from editor
+        //argc - 1 as we comparing indexes(start from 0)
+        if (i + 1<= argc - 1){
+          editor = argv[i+1];
+        }
+        else
+        {
+          endwin();
+          printf("Bad argument(editor)! Make sure to provide editor name after '-editor' argument \n");
+          exit(1);
+        }
+      }
+    }
+  }
+
+  // initializing an status_line
+  getcwd(pwd,sizeof(pwd));
+  status_line_newwin(); 
+}
+
+
+
 
 
 void update_values();
@@ -305,12 +566,11 @@ void draw_files(FilesArray filesArray);
 
 
 
-Popup popup;
 // Those functions described below main function
 void PopupDelete(FilesArray *fa,char *filename);
 void PopupRenameFile(char *filename,FilesArray *fa);
 void PopupCreateFile(FilesArray *fa);
-void PopupFileInfo(char *filename);
+void PopupFileInfo(char *filename,FilesArray *fa);
 
 void Popup_update_size_and_pos(){
   popup.MainSizeY = 13;
@@ -389,7 +649,14 @@ void Popup_draw_base(int draw_confirm){
 }
 
 void PopupTitle(char *title){
-  mvwprintw(popup.MainPopup_win,0,popup.MainSizeX / 2-5 ,"%s",title);
+
+  int title_start_pos = popup.MainSizeX / 2 - (strlen(title) / 2);
+  if (strlen(title) > popup.MainSizeX){
+    title_start_pos = 0;
+  }
+  
+
+  mvwprintw(popup.MainPopup_win,0,title_start_pos,"%s",title);
   wrefresh(popup.MainPopup_win);
 };
 void PopupPrintInside(char *text,int consider_confirm,int replace_old_text){
@@ -658,34 +925,54 @@ void PopupRenameFile_draw(){
 	Popup_draw_base(0);
   PopupTitle("Rename files?");
 }
-void PopupFileInfo_draw(char *filename,char *file_size){
+
+OperationStatus PopupFileInfo_get_dir_size(const char *path, FileInfo *file_info,FilesArray *fa);
+
+void PopupFileInfo_draw(char *filename,FilesArray *fa){
 	Popup_draw_base(0);
-  int confirm = 0;
-  int replace_old_text = 0;
+  int confirm = false;
+  int replace_old_text = false;
   PopupTitle(filename);
- 
-  int sizeof_show_file_size = strlen("File Size: ") + strlen(file_size) + 2;
-  char *show_file_size = malloc(sizeof_show_file_size);
-  if (show_file_size == NULL){
-    endwin();
-    printf("Memory allocation failed");
-    exit(1);
+  wmove(popup.MainPopup_win,1,1);
+  popup.last_used_y = 1;
+
+  FileInfo file_info;
+  file_info.file_size = 0;
+
+
+  // Get absolute file path
+  char fullpath[PATH_MAX];
+  snprintf(fullpath, strlen(pwd) + strlen(filename) + 2, "%s/%s", pwd,filename);
+
+  //Get more file information
+  if (get_file_info(fullpath,&file_info) == ERROR){return;}
+
+
+
+  //Showing file size 
+
+  wprintw(popup.MainPopup_win,"%s","Size: ");
+  //10 = 3-digit integer size + point + one int + space + 3 bytes for size format + NULL
+  char size_format[10] = {0};
+
+
+  if (file_info.is_regular == true){
+    off_t file_size = get_file_size(fullpath);
+    file_size_format(file_size,size_format,sizeof(size_format));
+    mvwprintw(popup.MainPopup_win,1,7,"%s",size_format);
   }
-  snprintf(show_file_size,sizeof_show_file_size,"%s%s","File Size: ",file_size);
-  PopupPrintInside(show_file_size, confirm, replace_old_text);
-  free(show_file_size);
+  else{ //File is directory or smth else
+    PopupFileInfo_get_dir_size(fullpath,&file_info,fa);
+  }
+
+  wrefresh(popup.MainPopup_win);
   popup.last_used_y = 0;
 }
 
 
 
 
-void update_values(){
-  getmaxyx(stdscr, stdscrY, stdscrX);
-  last_visible_file_index = stdscrY- status_line_height + dont_draw_file_index - 1;
-  getcwd(pwd,sizeof(pwd));
-  first_visible_file_index = dont_draw_file_index;
-}
+
 
 //We can use this function to check for changes in dir
 //Or we can use this function to update last_mtime
@@ -712,239 +999,12 @@ void update_last_mtime(){
 
 
 
-bool is_dir(char *filename){
-  struct stat file_stat;
-  if (stat(filename,&file_stat) != 0){
-    return false;
-  }
-  return S_ISDIR(file_stat.st_mode);
-}
 
 
 
-void resize_event(){
-  // updating values (for new screen size)
-  update_values();
-  //if highlight is trying to get out of a user view
-  if (highlight > last_visible_file_index){
-    if (last_visible_file_index >= 0){
-      highlight = last_visible_file_index;
-    }
-  }
-  clear_screen();
-}
-
-//Getch wrap to hold unexpected resize signal
-int getch_wrap(){
-  int input = getch();
-  if (input == KEY_RESIZE){
-    resize_event();
-  }  
-  return input;
-}
 
 
 
-//calls 'file <filename>' to get file info and writes it to filecmdresult
-void cmdFile(char *filename,char cmdFile_result[64]){
-  //file command example:
-  //     hello.txt: inode/x-empty; charset=binary
-  int size_cmd = strlen(filename) + 9;
-  char cmd[size_cmd];
-  snprintf(cmd,size_cmd,"file -i %s",filename);
-  FILE *stream;
-  if ( (stream = popen(cmd,"r")) ){
-    fgets(cmdFile_result,64,stream);
-  }
-  pclose(stream);
-}
-
-
-
-// /If <filename> type is a text like, open it in current terminal session (vim or whatever)
-//Else: let the xdg-open command work
-void open_file(char *filename){
-  char cmdFile_result[64];
-  cmdFile(filename,cmdFile_result);
-  if (strstr(cmdFile_result,"text") || strstr(cmdFile_result,"empty")){
-		endwin();
-	
-		
-		sigset_t new_mask, old_mask;
-		//block resize signal, so our app wont get crazy
-		sigemptyset(&new_mask);
-		sigaddset(&new_mask, SIGWINCH);
-		sigprocmask(SIG_BLOCK, &new_mask, &old_mask);
-
-
-		pid_t pid = fork();
-		//spawn new process
-		if (pid == 0){
-			//replace new process with vim or whatever editor user put in argv
-			execlp(editor,editor,filename,NULL);
-			//if execlp failed
-			exit(EXIT_SUCCESS);
-		}else{
-			//parent process
-			int status;
-			//waiting for child process(file editing) to finish
-			waitpid(pid,&status,0);
-		}
-		//restores signal mask, now SIGWINCH can be delivered
-		sigprocmask(SIG_SETMASK, &old_mask, NULL);
-
-		refresh();
-		clear_screen();
-		init_ncurses();
-		//force send resize signal so our app will process it again after blocking
-		raise(SIGWINCH);  
-  }
-  
-  //if file is not text related or empty
-  else{
-    pid_t pid;
-    //spawning new process
-    pid = fork();
-    if (pid == 0){
-      //change stdout descriptor so we wont get any warning and shit from xdg-open
-      int null_fd = open("/dev/null",O_WRONLY);
-      dup2(null_fd,2);
-      //replaces process with xdg-open 
-      execlp(FILE_OPENER,FILE_OPENER,filename,NULL); 
-    }
-  }
-}
-
-OperationStatus create_file(char filename[NAME_MAX]){
-  int filename_len = strlen(filename);
-  if (filename[filename_len- 1] == '/'){
-    filename[filename_len - 1] = '\0';
-
-
-
-    if (mkdir(filename, 0755) == 0) {
-      return SUCCESS;
-    } 
-    else {
-      return ERROR;
-    }
-  }
-
-  else
-  {
-    struct stat buffer;
-
-    // If file exists
-    if (stat(filename,&buffer) == 0){
-      return ERROR;
-    }
-    // Try to create file
-    FILE *file =fopen(filename,"w");
-    // Error appiered
-    if (!file){
-      return ERROR;
-    }
-
-
-    fclose(file);
-    return SUCCESS;
-  }
-}
-
-
-OperationStatus delete_file(char *filename){
-  if (remove(filename) != 0){
-    return ERROR;
-  }
-  return SUCCESS;
-}
-
-OperationStatus rename_file(char *old_filename,char *new_filename){
-	if (rename(old_filename,new_filename) == 0){
-		return SUCCESS;
-	}
-	
-	return ERROR;
-}
-
-
-long get_dir_size(const char *path){
-  struct dirent *entry;
-  struct stat entry_stat;
-  long total_size = 0; 
-  DIR *dp = opendir(path);
-
-  if (dp == NULL){
-    return -1; //Return an error code
-  }
-
-  while ((entry = readdir(dp)) != NULL){
-    // Skip "." and ".."   
-    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) { 
-      continue; 
-    } 
-    //Get the full path of the entry
-    char fullpath[PATH_MAX];
-    snprintf(fullpath,sizeof(fullpath),"%s/%s",path,entry->d_name);
-
-    //Get the file status
-    if (stat(fullpath, &entry_stat) == -1){
-      perror("stat");
-      continue; //Skip, if error
-    }
-
-    //If it`s directory, recurse into it
-    if (S_ISDIR(entry_stat.st_mode)){
-      long dir_size = get_dir_size(fullpath);
-    
-      //Successfuly got directory size
-      if (dir_size != -1) {
-        total_size += dir_size;
-        //Adding the block size of directory
-        total_size += entry_stat.st_size;
-      }
-    } else{
-      //Add the size of the file
-      total_size += entry_stat.st_size;
-      
-    }
-  }
-  closedir(dp);
-  return total_size;
-}
-
-
-OperationStatus get_file_info(char *path,FileInfo *file_info){
-  struct stat file_stat;
-
-  if (stat(path,&file_stat) < 0){
-    return ERROR;
-  }
-
-  if (is_dir(path) == true){
-    long dir_size = get_dir_size(path);
-    file_info->file_size = dir_size;
-  }
-  else{
-    file_info->file_size = file_stat.st_size;
-  }
-  
-  return SUCCESS; 
-}
-
-
-
-//for remove_directory func
-int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf){
-  int rv = remove(fpath);
-
-  return rv;
-}
-
-int remove_directory(char *path)
-{
-  return nftw(path, unlink_cb, 64, FTW_DEPTH | FTW_PHYS);
-}
 
 
 void *fzf(char *mode){
@@ -1080,14 +1140,14 @@ void handle_user_input(FilesArray *fa,int user_input){
       break;
     
     case KEY_FIND_FILE:
-      int second_input = getch_wrap();
+      int second_input = getch_wrap(stdscr);
       //ff
       if (second_input == 'f'){
         fzf("DEFAULT");
       }
       //fc - start of possible "fcd"
       if (second_input == 'c'){
-        int third_input = getch_wrap();
+        int third_input = getch_wrap(stdscr);
         //"fcd" - fast change directory
         if (third_input == 'd'){
           clear_screen();
@@ -1132,10 +1192,9 @@ void handle_user_input(FilesArray *fa,int user_input){
 				PopupRenameFile(filename,fa);
 			}
     case KEY_FILE_INFO:
-      //test environment
       if (dirlen > 0){
         char *filename = fa->filenames[highlight];
-        PopupFileInfo(filename);
+        PopupFileInfo(filename,fa);
       }
 
 
@@ -1292,7 +1351,7 @@ int main(int argc,char **argv){
     draw_files(filesArray);
     /* draw_status_line(); */
 
-    user_input = getch_wrap();
+    user_input = getch_wrap(stdscr);
     handle_user_input(&filesArray,user_input);
     refresh();
 
@@ -1338,13 +1397,13 @@ void PopupDelete(FilesArray *fa,char *filename){
         if (is_dir(filename)){
             if (remove_directory(filename) != 0){
               Popup_draw_error("Unable to delete this file");
-              getch_wrap();
+              getch_wrap(stdscr);
             }
           }
         else{
             if (delete_file(filename)!= 0){
               Popup_draw_error("Unable to delete this file");
-              getch_wrap();
+              getch_wrap(stdscr);
             }
           }
 
@@ -1371,13 +1430,13 @@ void PopupDelete(FilesArray *fa,char *filename){
           if (is_dir(filename)){
             if (remove_directory(filename) != 0){
               Popup_draw_error("Unable to delete this file");
-              getch_wrap();
+              getch_wrap(stdscr);
             }
           }
           else{
             if (delete_file(filename)!= 0){
               Popup_draw_error("Unable to delete this file");
-              getch_wrap();
+              getch_wrap(stdscr);
             }
           }
 
@@ -1471,7 +1530,7 @@ void PopupRenameFile (char *old_filename,FilesArray *fa){
 	if (confirm_rename){
 		if (rename_file(old_filename,new_filename) != SUCCESS){
 			Popup_draw_error("Can`t rename this file");
-			getch_wrap();
+			getch_wrap(stdscr);
 		}
 	}
 
@@ -1481,33 +1540,59 @@ void PopupRenameFile (char *old_filename,FilesArray *fa){
   free(new_filename);
 }
 
-void PopupFileInfo(char *filename){
-  FileInfo file_info;
-  char fullpath[PATH_MAX];
-  snprintf(fullpath, strlen(pwd) + strlen(filename) + 2, "%s/%s", pwd,filename);
-  
-
-  if (get_file_info(fullpath,&file_info) == ERROR){return;}
-
-
-
-  char *file_size_str = malloc( (file_info.file_size%10) + 2 );
-  if (file_size_str == NULL){
-    endwin();
-    printf("Memory allocation failed");
-    exit(1);
+OperationStatus PopupFileInfo_get_dir_size(const char *path,FileInfo *file_info,FilesArray *fa){
+  // Function for directory size animation, like it`s gaining size yk 
+  nodelay(popup.MainPopup_win,TRUE);
+  struct dirent *entry;
+  struct stat entry_stat;
+  DIR *dp = opendir(path);
+  if (dp == NULL){
+    return ERROR; 
   }
-  snprintf(file_size_str,sizeof(file_size_str), "%ld", file_info.file_size);
 
+  char size_format[10];
 
+  while ((entry = readdir(dp)) != NULL){
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) { 
+      continue; 
+    } 
 
+    char fullpath[PATH_MAX];
+    snprintf(fullpath,sizeof(fullpath),"%s/%s",path,entry->d_name);
 
+    if (lstat(fullpath, &entry_stat) < 0){
+      continue; 
+    }
+
+    if (S_ISDIR(entry_stat.st_mode)){
+      PopupFileInfo_get_dir_size(fullpath,file_info,fa); // just recurse, no adding return value
+    } else {
+      file_info->file_size += entry_stat.st_size; // add file size
+    }
+
+    wgetch(popup.MainPopup_win);
+
+  }
+  //Got size format (e.g 1 GB)
+  file_size_format(file_info->file_size, size_format, sizeof(size_format));
+  //Clear previous size
+  mvwprintw(popup.MainPopup_win,1,7,"               ");
+  //Print new size
+  mvwprintw(popup.MainPopup_win,1,7,"%s",size_format);
+  wrefresh(popup.MainPopup_win);
+
+  
+  closedir(dp);
+  nodelay(popup.MainPopup_win,false);
+  return SUCCESS;
+}
+
+void PopupFileInfo(char *filename,FilesArray *fa){
   PopupFileInfo_draw(
     filename,
-    file_size_str
+    fa
   );
-  free(file_size_str);
-  getch_wrap();
+  getch_wrap(stdscr);
   werase(popup.MainPopup_win);
   wrefresh(popup.MainPopup_win);
   delwin(popup.MainPopup_win);
