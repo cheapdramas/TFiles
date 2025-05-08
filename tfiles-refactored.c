@@ -56,12 +56,6 @@
 #define MALLOC_FAIL "Failed to allocate memory"
 
 
-typedef struct {
-  char ** filenames;
-  size_t size;
-  size_t last_used_index;
-}FilesArray;
-
 
 typedef struct{
   char *filename;
@@ -98,19 +92,24 @@ typedef enum {
 
 typedef struct{
   char *editor; 
-  
 }AppState;
+
+
+typedef struct{
+  char **filenames;
+  size_t size;
+  unsigned int last_index;
+}FilesArray;
+
 
 typedef struct{
   FilesArray files;
-  Popup popup;
-  StatusLine status;
   WINDOW *curses_win;
-  int startX;
   char pwd[PATH_MAX];
   char previous_path[PATH_MAX];
   int highlight;
 }Window;
+
 
 typedef struct{
   Window *first_window, *second_window, *active_window;
@@ -133,29 +132,73 @@ typedef struct {
   WindowManager winmgr;
 }App;
 
-void free_window(Window *window){
-  //Free stuff from window
-  if (window->curses_win != NULL){
-    delwin(window->curses_win);
-  }
 
-  free(window);
+void init_ncurses(App *app){
+  initscr();
+  curs_set(0);
+  noecho();
+  keypad(stdscr, true);
+
+  getmaxyx(stdscr, app->winmgr.stdscrY, app->winmgr.stdscrX);
+
+	use_default_colors();
+  start_color();
+  init_pair(1,COLOR_YELLOW,-1);
+  init_pair(2,COLOR_RED, -1);
+}
+
+
+void destroy_ncurses_window(WINDOW **win){
+  if (*win == NULL){
+    return;
+  }
+  werase(*win);
+  wrefresh(*win);
+  delwin(*win);
+  *win = NULL;
+}
+
+
+void free_files_window(Window *window){
+  if (window->files.filenames == NULL){
+    return;
+  }
+  
+  for (int i = 0; i < window->files.last_index; i++){
+    free(window->files.filenames[i]);
+  }
+  free(window->files.filenames);
+
+  window->files.last_index = 0;
+  window->files.size = 0;
+  window->files.filenames = NULL;
+}
+
+
+void free_window(Window **window){
+  if (*window == NULL){
+    return;
+  }
+  Window *window_ = *window;
+  //Free stuff from window
+  destroy_ncurses_window(&window_->curses_win);
+  free_files_window(*window);
+
+  free(window_);
+  *window = NULL;
 }
 
 
 void app_exit(App *app, const char *reason, ...){
+  //Free windows
+  free_window(&app->winmgr.first_window);
+  free_window(&app->winmgr.second_window);
+
+
   curs_set(1);
+  echo();
   endwin();
 
-  //Free shit from app
-
-  //Free windows
-  if (app->winmgr.first_window != NULL){
-    free_window(app->winmgr.first_window);
-  }
-  if (app->winmgr.second_window != NULL){
-    free_window(app->winmgr.second_window);
-  }
 
   //Reason is passed
   if (reason!=NULL){
@@ -201,6 +244,105 @@ void *malloc_wrap(App *app,size_t size) {
 }
 
 
+void chdir_wrap(App *app,const char *path){
+  if (chdir(path) < 0){
+    app_exit(app, "Failed to change directory");
+  }
+}
+
+
+//for qsort
+int compare_filenames(const void *a, const void *b) {
+  return strcmp(*(char **)a, *(char **)b);
+}
+
+
+void fill_files_window(App *app, Window *window){
+  if (window->files.filenames != NULL){
+    free_files_window(window);
+  }
+
+  window->files.last_index = 0;
+  window->files.size = 2;
+  window->files.filenames = malloc_wrap(app, window->files.size * sizeof(char *));
+  memset(window->files.filenames, 0, window->files.size * sizeof(char *));
+
+  DIR *dirp;
+  struct dirent *entry; 
+  dirp = opendir(window->pwd); 
+  if (dirp == NULL){
+    app_exit(app,"Failed to open directory");
+    return;
+  }
+
+  //Reading directory
+  while ((entry = readdir(dirp)) != NULL){
+    //Skip if filename = "." or ".."
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0){
+      continue;
+    }
+
+    //Realloc if array too small
+    if (window->files.last_index >= window->files.size){
+      size_t old_size = window->files.size;
+      window->files.size *= 2;
+
+      char ** new_filenames = realloc(window->files.filenames,window->files.size * sizeof(char *));
+      if (new_filenames == NULL){
+        app_exit(app, MALLOC_FAIL);
+      }
+      //Initialize new reallocated empty space,
+      //So it won't point to garbage
+      memset(new_filenames + old_size, 0, (window->files.size - old_size) * sizeof(char *));
+
+      //Update array
+      window->files.filenames = new_filenames;
+    }
+    
+    window->files.filenames[window->files.last_index] = strdup(entry->d_name);
+    if (window->files.filenames[window->files.last_index] == NULL){
+      app_exit(app, MALLOC_FAIL);
+    }
+
+    window->files.last_index += 1;
+  }
+
+  //If after reading directory, last_index = 0
+  //Than directory is empty
+  if (window->files.last_index == 0){
+    free_files_window(window);
+  }
+  
+  //Sort filenames
+  qsort(window->files.filenames, window->files.last_index, sizeof(char *), compare_filenames);
+
+  closedir(dirp);
+}
+
+
+void copy_files_window(App *app, Window *dest, Window *src){
+  if (src->files.filenames == NULL){
+    return;
+  }
+  if (dest->files.filenames != NULL){
+    free_files_window(dest);
+  }
+
+  dest->files.size = src->files.size;
+  dest->files.last_index = src->files.last_index;
+  dest->files.filenames = malloc_wrap(app, dest->files.size * sizeof(char * ));
+  memset(dest->files.filenames, 0, dest->files.size * sizeof(char *));
+
+  for (int i = 0; i < dest->files.last_index; i++){
+    char *src_filename = src->files.filenames[i];
+    dest->files.filenames[i] = strdup(src_filename);
+    if (dest->files.filenames[i] == NULL){
+      app_exit(app, MALLOC_FAIL);
+    }
+  }
+} 
+
+
 void update_windows_size(App *app){
   //Get new window size
   getmaxyx(stdscr, app->winmgr.stdscrY, app->winmgr.stdscrX);
@@ -208,25 +350,19 @@ void update_windows_size(App *app){
 
 
   //If only one window
-  if (app->winmgr.window_counter < 1){
-    if (app->winmgr.first_window->curses_win != NULL){
-      delwin(app->winmgr.first_window->curses_win);
-    }
+  if (app->winmgr.window_counter == 1){
+    destroy_ncurses_window(&app->winmgr.active_window->curses_win);
 
-    app->winmgr.first_window->curses_win = newwin(app->winmgr.stdscrY, app->winmgr.stdscrX, 0,0);
+    app->winmgr.active_window->curses_win = newwin(app->winmgr.stdscrY, app->winmgr.stdscrX, 0,0);
     //newwin failed
-    if (app->winmgr.first_window->curses_win == NULL){
+    if (app->winmgr.active_window->curses_win == NULL){
       app_exit(app,"Failed to create window");
     }
   }
   //If two
   else{
-    if (app->winmgr.first_window->curses_win != NULL){
-      delwin(app->winmgr.first_window->curses_win);
-    } 
-    if (app->winmgr.second_window->curses_win != NULL){
-      delwin(app->winmgr.second_window->curses_win);
-    }
+    destroy_ncurses_window(&app->winmgr.first_window->curses_win);
+    destroy_ncurses_window(&app->winmgr.second_window->curses_win);
 
     app->winmgr.first_window->curses_win = newwin(app->winmgr.stdscrY, app->winmgr.stdscrX / 2 - 1, 0, 1);
     if (app->winmgr.first_window->curses_win == NULL){
@@ -238,36 +374,16 @@ void update_windows_size(App *app){
       app_exit(app, "Failed to create window");
     }
   }
-
 }
 
 
-
-void *create_window(App *app,char pwd[PATH_MAX]){
+Window *create_window(App *app,const char *pwd){
   Window *window = malloc_wrap(app,sizeof(Window));
 
-  window->curses_win = newwin(0, 0, 0, 0);
-  if (window->curses_win == NULL){
-    app_exit(app, "You are ackshually bad at this");
-  }
-  //First window
-  if (app->winmgr.window_counter < 1){
-    app->winmgr.first_window = window;
-  }
-  //Second_window
-  else{
-    app->winmgr.second_window = window;
-  }
-
-  app->winmgr.active_window = window;
+  window->files.filenames = NULL;
+  window->highlight = 0; 
 
 
-
-  //Setup window
-  
-  update_windows_size(app);
-  
-  window->highlight = 0;  
   //If pwd is specified
   if (pwd != NULL){
     snprintf(window->pwd, sizeof(window->pwd), "%s", pwd);
@@ -278,16 +394,70 @@ void *create_window(App *app,char pwd[PATH_MAX]){
       app_exit(app,"getcwd() failed: %s",strerror(errno));
     }
   }
-  if (app->winmgr.window_counter < 1){
+
+
+  //Increasing window counter
+  if (app->winmgr.window_counter <= 1){
     app->winmgr.window_counter += 1;
   }
+
+  //First window (only at the start)
+  if (app->winmgr.window_counter == 1){
+    app->winmgr.first_window = window;
+  }
+  //Two windows
+  else{
+    //Check which window to create
+    //Assign new window to first
+    if (!app->winmgr.first_window){
+      copy_files_window(app, window,app->winmgr.second_window);
+      app->winmgr.first_window = window;
+    } 
+    //Assign new window to second
+    else{
+      copy_files_window(app, window,app->winmgr.first_window);
+      app->winmgr.second_window = window;
+    }
+  }
+  app->winmgr.active_window = window;
+  
+  
+
+
+  //Create WINDOW* with appropriate size
+  window->curses_win = NULL;
+  update_windows_size(app);
+
+
   return window;
+}
+
+void close_window(App *app){
+  if (app->winmgr.window_counter < 2){
+    return;
+  }
+
+    //Active window is first one, remove first
+  if (app->winmgr.active_window == app->winmgr.first_window){
+    free_window(&app->winmgr.first_window);
+    app->winmgr.active_window = app->winmgr.second_window;
+  }
+  //Active window is second one, remove second
+  else{
+    free_window(&app->winmgr.second_window);
+    app->winmgr.active_window = app->winmgr.first_window;
+  } 
+  
+  
+  app->winmgr.window_counter -= 1;
+
+  update_windows_size(app);
 }
 
 
 OperationStatus create_dir(const char *path){
   if (mkdir(path,0700) < 0){
-    if (errno==EEXIST){
+    if (errno == EEXIST){
       return EXISTS;
     }
     return ERROR;
@@ -296,19 +466,6 @@ OperationStatus create_dir(const char *path){
 }
 
 
-void init_ncurses(App *app){
-  initscr();
-  curs_set(0);
-  noecho();
-  keypad(stdscr, true);
-
-  getmaxyx(stdscr, app->winmgr.stdscrY, app->winmgr.stdscrX);
-
-	use_default_colors();
-  start_color();
-  init_pair(1,COLOR_YELLOW,-1);
-  init_pair(2,COLOR_RED, -1);
-}
 
 
 void init_app_folders(App *app){
@@ -331,30 +488,15 @@ void init_app_folders(App *app){
 }
 
 
-void init_app(int argc, char **argv, App *app){
-  init_app_folders(app);
-
-  //Set window counter to 0
-  app->winmgr.window_counter = 0;
-
-
-  //Create first window
-  Window *first_window = create_window(app, NULL);
-
-
-  //Set default editor
-  app->state.editor = getenv("EDITOR"); 
-
-  if (app->state.editor == NULL){
+void parse_app_arguments(App *app, int argc, char **argv){
+  //Init editor
+  //If user passed an editor, it will change later
+  if ((app->state.editor = getenv("EDITOR")) == NULL){
     app->state.editor = "vim";
   }
-  
-  //Parsing arguments 
-  
-  //No arguments passed
-  if (argc < 2){
-    return;
-  }
+
+  //Check if arguments passed
+  if (argc < 2){return;}
   
   int argument_idx_start = 0;
 
@@ -371,7 +513,7 @@ void init_app(int argc, char **argv, App *app){
       //Check if next argument avaible
       if (i + 1 < argc){
         char *path = argv[i+1];
-        snprintf(first_window->pwd, sizeof(first_window->pwd), "%s", path);
+        chdir_wrap(app, path);
 
         i++;
         continue;
@@ -382,7 +524,7 @@ void init_app(int argc, char **argv, App *app){
     if (strcmp(argument, "-editor") == 0){
       //Check if next argument avaible
       if (i + 1 < argc){
-        app->state.editor = argv[i+1];
+        app->state.editor= argv[i+1];
 
         i++;
         continue;
@@ -392,36 +534,125 @@ void init_app(int argc, char **argv, App *app){
 }
 
 
-void draw(App *app){
+void init_app(App *app, int argc, char **argv){
+  //Init data folders
+  init_app_folders(app);
 
+  //Parsing arguments
+  parse_app_arguments(app, argc, argv);
+
+  //Create first window
+  app->winmgr.window_counter = 0;
+  Window *first_window = create_window(app, NULL);
+
+  //Fill window with files
+  fill_files_window(app, first_window);
 }
+
+
+void draw_window(App *app, Window *window){
+  if (window == NULL){
+    return;
+  }
+
+  //Draw box around window
+  box(window->curses_win, 0, 0);
+  
+  //Draw files
+  if (window->files.filenames == NULL){
+    return;
+  }
+  
+  //Get window size
+  int window_size_y, window_size_x;
+  getmaxyx(window->curses_win, window_size_y, window_size_x);
+
+  int filename_index = 0;
+  int filename_draw_y = 1;
+
+  if (window->highlight > window_size_y){
+    filename_index = window->highlight;
+  }
+  
+  
+
+  for (int i = filename_index; i < window->files.last_index; i++){
+    char *filename = window->files.filenames[i];
+
+    if (window->highlight == i){
+      wattron(window->curses_win, A_REVERSE);
+    }
+    mvwprintw(window->curses_win,filename_draw_y,1,"%s",filename);
+    wattroff(window->curses_win, A_REVERSE);
+
+
+    filename_draw_y ++;
+  }
+
+  wrefresh(window->curses_win);
+}
+
+
+void draw(App *app){
+  refresh();
+  draw_window(app,app->winmgr.first_window);
+  draw_window(app,app->winmgr.second_window);
+}
+
+
 
 
 int main(int argc,char **argv){
   App app = {0};
   init_ncurses(&app);
-  init_app(argc, argv, &app);
+  init_app(&app,argc, argv);
 
 
-  //test
-  create_window(&app, NULL);
 
   //Main loop
 
   int user_input;
   while (user_input != 'q'){
-    box(app.winmgr.first_window->curses_win,0,0);
-    box(app.winmgr.second_window->curses_win,0,0);
-    refresh();
-    wrefresh(app.winmgr.active_window->curses_win);
-    wrefresh(app.winmgr.first_window->curses_win);
-
+    draw(&app);
 
     user_input = getch();
+    if (user_input == 'c'){
+      if (app.winmgr.window_counter == 1){
+        create_window(&app, NULL);
+      }
+    }
+
+
+    if (user_input == KEY_RIGHT && app.winmgr.window_counter > 1 && app.winmgr.active_window == app.winmgr.first_window){
+      werase(app.winmgr.first_window->curses_win);
+      app.winmgr.active_window = app.winmgr.second_window;
+    }
+    if (user_input == KEY_LEFT && app.winmgr.window_counter > 1 && app.winmgr.active_window == app.winmgr.second_window){
+      werase(app.winmgr.second_window->curses_win);
+      app.winmgr.active_window = app.winmgr.first_window;
+    }
+    if (user_input == KEY_DOWN && 
+        app.winmgr.active_window->files.filenames &&
+        app.winmgr.active_window->files.last_index -1 > app.winmgr.active_window->highlight
+    ){
+      app.winmgr.active_window->highlight += 1;
+    }
+    if (user_input == KEY_UP && 
+        app.winmgr.active_window->files.filenames &&
+        app.winmgr.active_window->highlight >= 1
+    ){
+      app.winmgr.active_window->highlight -= 1;
+    }
+
+
+
+    if (user_input == 'd'){
+      close_window(&app);
+    }
+   
     if (user_input == KEY_RESIZE){
       update_windows_size(&app);
     }
-    clear();
   }
 
   app_exit(&app,NULL);
