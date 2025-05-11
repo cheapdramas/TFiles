@@ -24,7 +24,6 @@
  *
  *
 */
-//Compile: gcc tfiles-refactored.c -lncursesw
 #include "config.h" 
 #include <linux/limits.h>
 #include <signal.h>
@@ -39,6 +38,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <locale.h>
+#include <wchar.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -76,13 +76,6 @@ typedef struct{
 }Popup;
 
 
-typedef struct{
-  WINDOW *window;
-  int height;
-  int width;
-}StatusLine;
-
-
 typedef enum {
   SUCCESS = 0,
   ERROR = 1,
@@ -92,6 +85,7 @@ typedef enum {
 
 typedef struct{
   char *editor; 
+  bool debug;
 }AppState;
 
 
@@ -108,13 +102,13 @@ typedef struct{
   char pwd[PATH_MAX];
   char previous_path[PATH_MAX];
   int highlight;
+  int scroll;
 }Window;
 
 
 typedef struct{
   Window *first_window, *second_window, *active_window;
-  int stdscrY;
-  int stdscrX;
+  
   uint8_t window_counter;
 }WindowManager;
 
@@ -139,7 +133,6 @@ void init_ncurses(App *app){
   noecho();
   keypad(stdscr, true);
 
-  getmaxyx(stdscr, app->winmgr.stdscrY, app->winmgr.stdscrX);
 
 	use_default_colors();
   start_color();
@@ -201,7 +194,7 @@ void app_exit(App *app, const char *reason, ...){
 
 
   //Reason is passed
-  if (reason!=NULL){
+  if (reason != NULL){
     //Prepare list for arguments
     va_list args;
     va_start(args, reason);
@@ -345,18 +338,27 @@ void copy_files_window(App *app, Window *dest, Window *src){
 
 void update_windows_size(App *app){
   //Get new window size
-  getmaxyx(stdscr, app->winmgr.stdscrY, app->winmgr.stdscrX);
-
-
+  int stdscrY, stdscrX;
+  getmaxyx(stdscr, stdscrY, stdscrX);
+  
 
   //If only one window
   if (app->winmgr.window_counter == 1){
     destroy_ncurses_window(&app->winmgr.active_window->curses_win);
 
-    app->winmgr.active_window->curses_win = newwin(app->winmgr.stdscrY, app->winmgr.stdscrX, 0,0);
+    app->winmgr.active_window->curses_win = newwin(stdscrY, stdscrX, 0,0);
     //newwin failed
     if (app->winmgr.active_window->curses_win == NULL){
       app_exit(app,"Failed to create window");
+    }
+
+    //If highlight is not in range of current window size
+    if (stdscrY - 5 < 0){
+      return;
+    }
+    if (app->winmgr.active_window->highlight > (stdscrY - 5) + app->winmgr.active_window->scroll){
+      //Set new scroll, so highlight would stay on the last file
+      app->winmgr.active_window->scroll += app->winmgr.active_window->highlight - ((stdscrY - 5) + app->winmgr.active_window->scroll);
     }
   }
   //If two
@@ -364,15 +366,30 @@ void update_windows_size(App *app){
     destroy_ncurses_window(&app->winmgr.first_window->curses_win);
     destroy_ncurses_window(&app->winmgr.second_window->curses_win);
 
-    app->winmgr.first_window->curses_win = newwin(app->winmgr.stdscrY, app->winmgr.stdscrX / 2 - 1, 0, 1);
+    app->winmgr.first_window->curses_win = newwin(stdscrY, stdscrX / 2 - 1, 0, 1);
     if (app->winmgr.first_window->curses_win == NULL){
       app_exit(app, "Failed to create window");
     }
 
-    app->winmgr.second_window->curses_win = newwin(app->winmgr.stdscrY, app->winmgr.stdscrX / 2, 0, app->winmgr.stdscrX/2);
+    app->winmgr.second_window->curses_win = newwin(stdscrY, stdscrX / 2, 0, stdscrX / 2);
     if (app->winmgr.second_window->curses_win == NULL){
       app_exit(app, "Failed to create window");
     }
+
+    //If highlight is not in range of current windows size
+    //Nothing to scroll
+    if (stdscrY - 5 < 0){
+      return;
+    }
+
+    if (app->winmgr.first_window->highlight > (stdscrY - 5) + app->winmgr.first_window->scroll){
+      //Set new scroll, so highlight would stay on the last file
+      app->winmgr.first_window->scroll += app->winmgr.first_window->highlight - ((stdscrY - 5) + app->winmgr.first_window->scroll);
+    }
+    if (app->winmgr.second_window->highlight > (stdscrY - 5) + app->winmgr.second_window->scroll){
+      app->winmgr.second_window->scroll += app->winmgr.second_window->highlight - ((stdscrY - 5) + app->winmgr.second_window->scroll);
+    }
+
   }
 }
 
@@ -382,6 +399,8 @@ Window *create_window(App *app,const char *pwd){
 
   window->files.filenames = NULL;
   window->highlight = 0; 
+  window->curses_win = NULL;
+  window->scroll = 0;
 
 
   //If pwd is specified
@@ -425,13 +444,13 @@ Window *create_window(App *app,const char *pwd){
 
 
   //Create WINDOW* with appropriate size
-  window->curses_win = NULL;
   update_windows_size(app);
 
 
   return window;
 }
 
+ 
 void close_window(App *app){
   if (app->winmgr.window_counter < 2){
     return;
@@ -530,6 +549,10 @@ void parse_app_arguments(App *app, int argc, char **argv){
         continue;
       }
     }
+    //If user want debug mode (for me mostly)
+    if (strcmp(argument, "-debug") == 0){
+      app->state.debug = true;
+    }
   }
 }
 
@@ -549,52 +572,154 @@ void init_app(App *app, int argc, char **argv){
   fill_files_window(app, first_window);
 }
 
+//If text is bigger than window width,
+//"Trim" or split it with '~'
+//e.g plank-realoaded = plank~oaded or pla~ed
+//With pwd flag we gonna chop only the start
+void trim_text(bool is_pwd, char *dest ,const char *src, int sizeX){
+  int src_len = strlen(src);
+ 
+  //Nothing to trim
+  if (src_len < sizeX){
+    strncpy(dest, src, sizeX);
+    dest[sizeX] = '\0';
+    return;
+  }
+  
+  //Trim pwd
+  if (is_pwd){
+    //2 = NULL in dest and '~' 
+    snprintf(dest, sizeX, "~%s", 2 + src + src_len - sizeX);
+    return;
+  }
+
+  //Trim somewhere in middle
+  int mid_index = sizeX / 2;
+  int end_part_len = mid_index - 2; 
+  if (end_part_len < 0) end_part_len = 0;
+
+  strncpy(dest, src, mid_index);
+  dest[mid_index] = '~';
+  strncpy(dest + mid_index + 1, src + src_len - end_part_len, end_part_len + 1);
+  dest[sizeX - 1] = '\0';
+}
+
+
+void draw_inactive_window_box(Window *window, int sizeY, int sizeX){
+  WINDOW *curs_win = window->curses_win;
+
+  //Corners
+  mvwaddch(curs_win, 0, 0, '+');
+  mvwaddch(curs_win, 0, sizeX - 1, '+');
+  mvwaddch(curs_win, sizeY - 1, 0, '+');
+  mvwaddch(curs_win, sizeY - 1, sizeX - 1, '+');
+
+  //Left & right lines
+  mvwvline(curs_win, 1, 0, '|', sizeY - 2);
+  mvwvline(curs_win, 1, sizeX - 1, '|', sizeY - 2);
+
+  //Top & bottom lines
+  mvwhline(curs_win, 0, 1, '-', sizeX - 2); 
+  mvwhline(curs_win, sizeY - 1, 1, '-', sizeX - 2); 
+  
+  wrefresh(curs_win);
+}
+
+
 
 void draw_window(App *app, Window *window){
   if (window == NULL){
     return;
   }
 
+  //Get window size
+  int window_size_y, window_size_x;
+  getmaxyx(window->curses_win, window_size_y, window_size_x);
+
   //Draw box around window
-  box(window->curses_win, 0, 0);
+  if (app->winmgr.active_window == window){
+    box(window->curses_win, 0, 0);
+  }
+  else{
+    draw_inactive_window_box(window, window_size_y, window_size_x);
+  }
+
+  //Draw line for status_line;
+  int status_line_height = 3;
+  int status_line_y = getmaxy(window->curses_win) - status_line_height;
+  int status_line_x = getmaxx(window->curses_win) - 2;
+  mvwhline(window->curses_win, status_line_y, 1, '-', status_line_x); 
+
+  //Display pwd
+  char pwd[window_size_x];
+  trim_text(true, pwd, window->pwd, window_size_x - 2);
+  mvwprintw(window->curses_win, status_line_y + 1, 1, "%s", pwd);
+
   
   //Draw files
   if (window->files.filenames == NULL){
     return;
   }
   
-  //Get window size
-  int window_size_y, window_size_x;
-  getmaxyx(window->curses_win, window_size_y, window_size_x);
-
-  int filename_index = 0;
+  int window_limit = window_size_y - status_line_height;
   int filename_draw_y = 1;
 
-  if (window->highlight > window_size_y){
-    filename_index = window->highlight;
-  }
   
   
 
-  for (int i = filename_index; i < window->files.last_index; i++){
+  for (int i = window->scroll; i < window->files.last_index; i++){
+    //Leave from loop if on window limit
+    if (filename_draw_y >= window_limit){
+      break;
+    }
+   
     char *filename = window->files.filenames[i];
+    char filename_trimmed[window_size_x];
+    trim_text(false, filename_trimmed, filename, window_size_x - 2);
 
+    mvwhline(window->curses_win, filename_draw_y, 1, ' ', window_size_x - 2); 
     if (window->highlight == i){
       wattron(window->curses_win, A_REVERSE);
     }
-    mvwprintw(window->curses_win,filename_draw_y,1,"%s",filename);
+    mvwprintw(window->curses_win, filename_draw_y, 1, "%s", filename_trimmed);
     wattroff(window->curses_win, A_REVERSE);
 
 
-    filename_draw_y ++;
+    filename_draw_y++;
   }
 
   wrefresh(window->curses_win);
 }
 
+void draw_debug(App *app){
+  clear();
+  Window *second_window = create_window(app, NULL);
+
+  int terminal_size_y, terminal_size_x;
+  getmaxyx(stdscr, terminal_size_y, terminal_size_x);
+
+  mvwprintw(stdscr, 0, 0, "Terminal size: {\n X: %d;\n Y: %d;\n}", terminal_size_x, terminal_size_y);
+  mvwprintw(stdscr, 3, 0, "Splitted window size: {\n X: %d;\n Y: %d;\n}", getmaxx(second_window->curses_win), getmaxy(second_window->curses_win));
+
+  int pwd_len = strlen(app->winmgr.first_window->pwd);
+  mvwprintw(stdscr, terminal_size_y - 3, 1, "%s", app->winmgr.first_window->pwd);
+
+
+  // draw_window(app,app->winmgr.second_window);
+
+
+
+  refresh();
+}
 
 void draw(App *app){
   refresh();
+  //If debug mode is on
+  if (app->state.debug){
+    draw_debug(app);
+    return;
+  }
+
   draw_window(app,app->winmgr.first_window);
   draw_window(app,app->winmgr.second_window);
 }
@@ -602,18 +727,21 @@ void draw(App *app){
 
 
 
-int main(int argc,char **argv){
+int main(int argc, char **argv){
+  setlocale(LC_CTYPE, "");
+
   App app = {0};
   init_ncurses(&app);
-  init_app(&app,argc, argv);
-
+  init_app(&app, argc, argv);
 
 
   //Main loop
 
   int user_input;
+  int active_window_sizeY, active_window_sizeX;
   while (user_input != 'q'){
     draw(&app);
+    getmaxyx(app.winmgr.active_window->curses_win, active_window_sizeY, active_window_sizeX);
 
     user_input = getch();
     if (user_input == 'c'){
@@ -622,26 +750,42 @@ int main(int argc,char **argv){
       }
     }
 
+    if (user_input == '\t' && app.winmgr.window_counter == 2){
+      //If active window is first one
+      if (app.winmgr.active_window == app.winmgr.first_window){
+        app.winmgr.active_window = app.winmgr.second_window;
+      }
+      //If active window is second one
+      else{
+        app.winmgr.active_window = app.winmgr.first_window;
+      }
 
-    if (user_input == KEY_RIGHT && app.winmgr.window_counter > 1 && app.winmgr.active_window == app.winmgr.first_window){
-      werase(app.winmgr.first_window->curses_win);
-      app.winmgr.active_window = app.winmgr.second_window;
-    }
-    if (user_input == KEY_LEFT && app.winmgr.window_counter > 1 && app.winmgr.active_window == app.winmgr.second_window){
-      werase(app.winmgr.second_window->curses_win);
-      app.winmgr.active_window = app.winmgr.first_window;
     }
     if (user_input == KEY_DOWN && 
         app.winmgr.active_window->files.filenames &&
-        app.winmgr.active_window->files.last_index -1 > app.winmgr.active_window->highlight
+        app.winmgr.active_window->files.last_index - 1 > app.winmgr.active_window->highlight
     ){
       app.winmgr.active_window->highlight += 1;
+      //Scroll
+
+      //- 3 because of status line height
+      int window_limit = (active_window_sizeY - 3);
+      int last_visible_file_idx = window_limit + app.winmgr.active_window->scroll;
+      //+ 1 to trigger scroll on the last visible file 
+      if (app.winmgr.active_window->highlight + 1 >= last_visible_file_idx){
+        app.winmgr.active_window->scroll += 1;
+      }
     }
     if (user_input == KEY_UP && 
         app.winmgr.active_window->files.filenames &&
         app.winmgr.active_window->highlight >= 1
     ){
       app.winmgr.active_window->highlight -= 1;
+      //Scroll 
+      
+      if (app.winmgr.active_window->highlight + 1 <= app.winmgr.active_window->scroll){
+        app.winmgr.active_window->scroll -= 1;
+      }
     }
 
 
