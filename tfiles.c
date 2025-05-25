@@ -28,6 +28,8 @@
 
 #define MALLOC_FAIL "Failed to allocate memory"
 
+#define STATUSLINE_HEIGHT 3
+
 typedef struct {
   char *filename;
   off_t filesize;
@@ -275,6 +277,22 @@ void fill_files_window(App *app, Window *window) {
   closedir(dirp);
 }
 
+void clear_window(Window *window) {
+  // Clears only what inside in window (pwd, files)
+  int maxY, maxX;
+  getmaxyx(window->curses_win, maxY, maxX);
+	
+
+  // Clear files
+  for (int y = 1; y < maxY; y++) {
+    mvwhline(window->curses_win, y, 1, ' ', maxX - 2);
+  }
+	//Clear pwd
+	mvwhline(window->curses_win, 1 + maxY - STATUSLINE_HEIGHT, 1, ' ', maxX - 2);
+
+	wrefresh(window->curses_win);
+}
+
 void chdir_window(App *app, const char *path, Window *window) {
   if (strlen(window->pwd) == 1 &&
       strcmp(path, "..") == 0) { // If at '/' and trying to cd ..
@@ -289,8 +307,7 @@ void chdir_window(App *app, const char *path, Window *window) {
   window->scroll = 0;
   free_files_window(window);
   fill_files_window(app, window);
-  werase(window->curses_win);
-  wrefresh(window->curses_win);
+	clear_window(window);
 }
 
 void copy_window(App *app, Window *dest, Window *src) {
@@ -630,8 +647,7 @@ void draw_window(App *app, Window *window) {
   }
 
   // Draw line for status_line;
-  int status_line_height = 3;
-  int status_line_y = getmaxy(window->curses_win) - status_line_height;
+  int status_line_y = getmaxy(window->curses_win) - STATUSLINE_HEIGHT;
   int status_line_x = getmaxx(window->curses_win) - 2;
   mvwhline(window->curses_win, status_line_y, 1, '-', status_line_x);
 
@@ -640,12 +656,13 @@ void draw_window(App *app, Window *window) {
   trim_text(true, pwd, window->pwd, window_size_x - 2);
   mvwaddwstr(window->curses_win, status_line_y + 1, 1, pwd);
 
+  wrefresh(window->curses_win);
   // Draw files
   if (window->files.filenames == NULL) {
     return;
   }
 
-  int window_limit = window_size_y - status_line_height;
+  int window_limit = window_size_y - STATUSLINE_HEIGHT;
   int filename_draw_y = 1;
 
   for (int i = window->scroll; i < window->files.last_index; i++) {
@@ -687,25 +704,25 @@ void draw_window(App *app, Window *window) {
 }
 
 void draw_debug(App *app) {
-  clear();
-  Window *second_window = create_window(app, NULL);
-
-  int terminal_size_y, terminal_size_x;
-  getmaxyx(stdscr, terminal_size_y, terminal_size_x);
-
-  mvwprintw(stdscr, 0, 0, "Terminal size: {\n X: %d;\n Y: %d;\n}",
-            terminal_size_x, terminal_size_y);
-  mvwprintw(stdscr, 3, 0, "Splitted window size: {\n X: %d;\n Y: %d;\n}",
-            getmaxx(second_window->curses_win),
-            getmaxy(second_window->curses_win));
-
-  int pwd_len = strlen(app->winmgr.first_window->pwd);
-  mvwprintw(stdscr, terminal_size_y - 3, 1, "%s",
-            app->winmgr.first_window->pwd);
-
-  draw_window(app, app->winmgr.second_window);
-
-  refresh();
+  // clear();
+  // Window *second_window = create_window(app, NULL);
+  //
+  // int terminal_size_y, terminal_size_x;
+  // getmaxyx(stdscr, terminal_size_y, terminal_size_x);
+  //
+  // mvwprintw(stdscr, 0, 0, "Terminal size: {\n X: %d;\n Y: %d;\n}",
+  //           terminal_size_x, terminal_size_y);
+  // mvwprintw(stdscr, 3, 0, "Splitted window size: {\n X: %d;\n Y: %d;\n}",
+  //           getmaxx(second_window->curses_win),
+  //           getmaxy(second_window->curses_win));
+  //
+  // int pwd_len = strlen(app->winmgr.first_window->pwd);
+  // mvwprintw(stdscr, terminal_size_y - 3, 1, "%s",
+  //           app->winmgr.first_window->pwd);
+  //
+  // draw_window(app, app->winmgr.second_window);
+  //
+  // refresh();
 }
 
 void draw(App *app) {
@@ -753,7 +770,7 @@ void input_handler(App *app, int user_input) {
     app->winmgr.active_window->highlight += 1;
     // Scroll
     int active_window_height =
-        getmaxy(app->winmgr.active_window->curses_win) - 3;
+        getmaxy(app->winmgr.active_window->curses_win) - STATUSLINE_HEIGHT;
     int last_visible_file_idx =
         active_window_height + app->winmgr.active_window->scroll;
     if (app->winmgr.active_window->highlight + 1 >= last_visible_file_idx) {

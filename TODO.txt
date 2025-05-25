@@ -1,0 +1,4 @@
+1. relative numbers
+2. Basic add/delete/rename stuff
+3. when cd .. point to previous folder
+
