@@ -1,3 +1,4 @@
+//gcc tfiles.c $(pkg-config ncursesw --libs --cflags) -lm
 #include "config.h"
 #include <dirent.h>
 #include <errno.h>
@@ -19,6 +20,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <wchar.h>
+#include <math.h>
+#include <ctype.h>
 
 #define COLOR_PAIR_YELLOW 1
 #define COLOR_PAIR_RED 2
@@ -58,12 +61,16 @@ typedef struct {
 typedef struct {
   char **filenames;
   size_t size;
-  unsigned int last_index;
+	//CAUTION 
+	//files_count == how much files in directory, not indexed 
+	//(it`s starting from 1)
+  unsigned int files_count;
 } FilesArray;
 
 typedef struct {
   FilesArray files;
   WINDOW *curses_win;
+	bool relative_number;
   char pwd[PATH_MAX];
   char previous_path[PATH_MAX];
   int highlight;
@@ -86,6 +93,13 @@ typedef struct {
   AppDataPaths data_paths;
   WindowManager winmgr;
 } App;
+
+int number_length(int n) {
+	//e.g n = 100
+	if (n == 0) return 1;
+	//log10(100) = 2 + 1 = 3
+	return (int)log10(n) + 1;
+}
 
 void init_ncurses(App *app) {
   initscr();
@@ -114,12 +128,12 @@ void free_files_window(Window *window) {
     return;
   }
 
-  for (int i = 0; i < window->files.last_index; i++) {
+  for (int i = 0; i < window->files.files_count; i++) {
     free(window->files.filenames[i]);
   }
   free(window->files.filenames);
 
-  window->files.last_index = 0;
+  window->files.files_count = 0;
   window->files.size = 0;
   window->files.filenames = NULL;
 }
@@ -216,7 +230,7 @@ void fill_files_window(App *app, Window *window) {
     free_files_window(window);
   }
 
-  window->files.last_index = 0;
+  window->files.files_count = 0;
   window->files.size = 2;
   window->files.filenames =
       malloc_wrap(app, window->files.size * sizeof(char *));
@@ -238,7 +252,7 @@ void fill_files_window(App *app, Window *window) {
     }
 
     // Realloc if array too small
-    if (window->files.last_index >= window->files.size) {
+    if (window->files.files_count >= window->files.size) {
       size_t old_size = window->files.size;
       window->files.size *= 2;
 
@@ -256,22 +270,22 @@ void fill_files_window(App *app, Window *window) {
       window->files.filenames = new_filenames;
     }
 
-    window->files.filenames[window->files.last_index] = strdup(entry->d_name);
-    if (window->files.filenames[window->files.last_index] == NULL) {
+    window->files.filenames[window->files.files_count] = strdup(entry->d_name);
+    if (window->files.filenames[window->files.files_count] == NULL) {
       app_exit(app, MALLOC_FAIL);
     }
 
-    window->files.last_index += 1;
+    window->files.files_count += 1;
   }
 
   // If after reading directory, last_index = 0
   // Than directory is empty
-  if (window->files.last_index == 0) {
+  if (window->files.files_count == 0) {
     free_files_window(window);
   }
 
   // Sort filenames
-  qsort(window->files.filenames, window->files.last_index, sizeof(char *),
+  qsort(window->files.filenames, window->files.files_count, sizeof(char *),
         compare_filenames);
 
   closedir(dirp);
@@ -320,11 +334,11 @@ void copy_window(App *app, Window *dest, Window *src) {
 
   strncpy(dest->pwd, src->pwd, sizeof(src->pwd));
   dest->files.size = src->files.size;
-  dest->files.last_index = src->files.last_index;
+  dest->files.files_count = src->files.files_count;
   dest->files.filenames = malloc_wrap(app, dest->files.size * sizeof(char *));
   memset(dest->files.filenames, 0, dest->files.size * sizeof(char *));
 
-  for (int i = 0; i < dest->files.last_index; i++) {
+  for (int i = 0; i < dest->files.files_count; i++) {
     char *src_filename = src->files.filenames[i];
     dest->files.filenames[i] = strdup(src_filename);
     if (dest->files.filenames[i] == NULL) {
@@ -630,6 +644,7 @@ void draw_inactive_window_box(Window *window, int sizeY, int sizeX) {
   wrefresh(curs_win);
 }
 
+
 void draw_window(App *app, Window *window) {
   if (window == NULL) {
     return;
@@ -664,8 +679,9 @@ void draw_window(App *app, Window *window) {
 
   int window_limit = window_size_y - STATUSLINE_HEIGHT;
   int filename_draw_y = 1;
+  int filename_draw_x = number_length(window->files.files_count) + 2;
 
-  for (int i = window->scroll; i < window->files.last_index; i++) {
+  for (int i = window->scroll; i < window->files.files_count; i++) {
     // Leave from loop if on window limit
     if (filename_draw_y >= window_limit) {
       break;
@@ -673,7 +689,7 @@ void draw_window(App *app, Window *window) {
 
     char *filename = window->files.filenames[i];
     wchar_t filename_trimmed[window_size_x];
-    trim_text(false, filename_trimmed, filename, window_size_x - 2);
+    trim_text(false, filename_trimmed, filename, window_size_x - filename_draw_x);
 
     // Getting file type
     // TODO. can you cache smth here? (at least, with cache values, check if dir
@@ -692,8 +708,15 @@ void draw_window(App *app, Window *window) {
     if (window->highlight == i) {
       wattron(window->curses_win, A_REVERSE);
     }
+    // Draw file index
+    if (!window->relative_number || window->highlight == i) { // Draw absolute numbers
+      mvwprintw(window->curses_win, filename_draw_y, 1, "%d", i);
+    } else { // Draw relative numbers */
+      mvwprintw(window->curses_win, filename_draw_y, 1, "%d", abs(window->highlight - i));
+    }
+		//Display file
+    mvwaddwstr(window->curses_win, filename_draw_y, filename_draw_x, filename_trimmed);
 
-    mvwaddwstr(window->curses_win, filename_draw_y, 1, filename_trimmed);
     wattroff(window->curses_win, COLOR_PAIR(COLOR_PAIR_RED));
     wattroff(window->curses_win, A_REVERSE);
 
@@ -704,25 +727,30 @@ void draw_window(App *app, Window *window) {
 }
 
 void draw_debug(App *app) {
-  // clear();
-  // Window *second_window = create_window(app, NULL);
-  //
-  // int terminal_size_y, terminal_size_x;
-  // getmaxyx(stdscr, terminal_size_y, terminal_size_x);
-  //
-  // mvwprintw(stdscr, 0, 0, "Terminal size: {\n X: %d;\n Y: %d;\n}",
-  //           terminal_size_x, terminal_size_y);
+
+	Window *first_window = app->winmgr.first_window;
+	Window *second_window = app->winmgr.second_window;
+
+
+  int terminal_size_y, terminal_size_x;
+  getmaxyx(stdscr, terminal_size_y, terminal_size_x);
+
+  mvwprintw(stdscr, 0, 0, "Terminal size: {\n X: %d;\n Y: %d;\n}",
+            terminal_size_x, terminal_size_y);
   // mvwprintw(stdscr, 3, 0, "Splitted window size: {\n X: %d;\n Y: %d;\n}",
   //           getmaxx(second_window->curses_win),
   //           getmaxy(second_window->curses_win));
   //
-  // int pwd_len = strlen(app->winmgr.first_window->pwd);
-  // mvwprintw(stdscr, terminal_size_y - 3, 1, "%s",
-  //           app->winmgr.first_window->pwd);
-  //
-  // draw_window(app, app->winmgr.second_window);
-  //
-  // refresh();
+  // draw_window(app, app->winmgr.first_window);
+	int first_win_sizeX,first_win_sizeY;
+  getmaxyx(first_window->curses_win, first_win_sizeY,first_win_sizeX);
+	first_win_sizeY -= STATUSLINE_HEIGHT;
+  mvwprintw(stdscr, 4, 0, "Window size: {\n X: %d;\n Y: %d;\n}",
+            first_win_sizeX, first_win_sizeY);
+
+
+
+  refresh();
 }
 
 void draw(App *app) {
@@ -738,8 +766,14 @@ void draw(App *app) {
 }
 
 void input_handler(App *app, int user_input) {
-  switch (user_input) {
+	int jump_number = 0;
 
+	while (isdigit(user_input)){
+		jump_number = jump_number * 10 + (user_input - '0'); 
+		user_input = getch();
+	}
+
+  switch (user_input) {
   // Create window
   case 'c':
     if (app->winmgr.window_counter == 1) {
@@ -759,23 +793,52 @@ void input_handler(App *app, int user_input) {
     }
 
     return;
+	// Switch between numbers mode: relative / absolute
+	case 'n':
+		if (app->winmgr.active_window->relative_number){
+			app->winmgr.active_window->relative_number = false;
+		}	
+		else{
+			app->winmgr.active_window->relative_number = true;
+		}
+		return;
+		
   // Movement
   case KEY_DOWN:
   case KEY_NAVDOWN:
     if (!app->winmgr.active_window->files.filenames ||
-        app->winmgr.active_window->highlight + 2 >
-            app->winmgr.active_window->files.last_index) {
+        app->winmgr.active_window->highlight + 1 >=
+            app->winmgr.active_window->files.files_count) {
       return;
     }
-    app->winmgr.active_window->highlight += 1;
+		int files_count = app->winmgr.active_window->files.files_count;
+		//If try to jump to unexisting file position
+		if (jump_number >= files_count || app->winmgr.active_window->highlight + jump_number > files_count){
+			//Set highlight to last file index 
+			app->winmgr.active_window->highlight = files_count - 1; //-1 because we want last index 
+		}
+		else{
+			//if: jump_number != 0, add it
+			//else: add 1
+			app->winmgr.active_window->highlight += jump_number ? jump_number : 1;
+		}
+
+
+
+
     // Scroll
-    int active_window_height =
-        getmaxy(app->winmgr.active_window->curses_win) - STATUSLINE_HEIGHT;
-    int last_visible_file_idx =
-        active_window_height + app->winmgr.active_window->scroll;
+    int active_window_height = getmaxy(app->winmgr.active_window->curses_win) - STATUSLINE_HEIGHT;
+    int last_visible_file_idx = active_window_height + app->winmgr.active_window->scroll;
+
     if (app->winmgr.active_window->highlight + 1 >= last_visible_file_idx) {
-      app->winmgr.active_window->scroll += 1;
-    }
+			if (app->winmgr.active_window->highlight > files_count - active_window_height) {
+				app->winmgr.active_window->scroll = files_count - active_window_height + 1;
+			}
+			else{
+				app->winmgr.active_window->scroll += jump_number ? jump_number : 1;
+			}
+
+		}
     return;
 
   case KEY_UP:
