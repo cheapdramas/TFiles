@@ -1,3 +1,4 @@
+
 //gcc tfiles.c $(pkg-config ncursesw --libs --cflags) -lm
 #include "config.h"
 #include <dirent.h>
@@ -765,11 +766,75 @@ void draw(App *app) {
   draw_window(app, app->winmgr.second_window);
 }
 
+void move_highlight(Window *window, int jump_counter, bool move_down){
+	if (!window->files.filenames){
+		return;
+	}
+
+	int files_count = window->files.files_count;
+	int window_height = getmaxy(window->curses_win) - STATUSLINE_HEIGHT;
+
+	if (move_down){
+    if (window->highlight + 1 >= window->files.files_count) {
+      return;
+    }
+		//If try to jump to unexisting file position
+		if (jump_counter >= files_count || window->highlight + jump_counter > files_count){
+			//Set highlight to last file index 
+			window->highlight = files_count - 1; //-1 because we want last index 
+		}
+		else{
+			//if: jump_number != 0, add it
+			//else: add 1
+			window->highlight += jump_counter ? jump_counter : 1;
+		}
+
+
+    // Scroll
+    int last_visible_file_idx = window_height + window->scroll;
+
+    if (window->highlight + 1 >= last_visible_file_idx) {
+
+			if (window->highlight > files_count - window_height) {
+				window->scroll = files_count - window_height + 1;
+			}
+			else{
+				window->scroll += jump_counter ? jump_counter : 1;
+			}
+
+		}
+    return;
+	}
+
+	//Move up
+	if (window->highlight - 1 < 0) {
+		return;
+	}
+	
+
+	if (jump_counter >= files_count || window->highlight - jump_counter < 0){
+		window->highlight = 0;
+	}
+	else{
+		window->highlight -= jump_counter ? jump_counter : 1;
+	}
+	// Scroll
+	if (window->highlight + 1 <= window->scroll) {
+		if (window->scroll - jump_counter < 0){
+			window->scroll = 0;
+		}
+		else{
+			window->scroll -= jump_counter ? jump_counter : 1;
+		}
+	}
+	return;
+}
+
 void input_handler(App *app, int user_input) {
-	int jump_number = 0;
+	int jump_counter = 0;
 
 	while (isdigit(user_input)){
-		jump_number = jump_number * 10 + (user_input - '0'); 
+		jump_counter = jump_counter * 10 + (user_input - '0'); 
 		user_input = getch();
 	}
 
@@ -806,54 +871,13 @@ void input_handler(App *app, int user_input) {
   // Movement
   case KEY_DOWN:
   case KEY_NAVDOWN:
-    if (!app->winmgr.active_window->files.filenames ||
-        app->winmgr.active_window->highlight + 1 >=
-            app->winmgr.active_window->files.files_count) {
-      return;
-    }
-		int files_count = app->winmgr.active_window->files.files_count;
-		//If try to jump to unexisting file position
-		if (jump_number >= files_count || app->winmgr.active_window->highlight + jump_number > files_count){
-			//Set highlight to last file index 
-			app->winmgr.active_window->highlight = files_count - 1; //-1 because we want last index 
-		}
-		else{
-			//if: jump_number != 0, add it
-			//else: add 1
-			app->winmgr.active_window->highlight += jump_number ? jump_number : 1;
-		}
-
-
-
-
-    // Scroll
-    int active_window_height = getmaxy(app->winmgr.active_window->curses_win) - STATUSLINE_HEIGHT;
-    int last_visible_file_idx = active_window_height + app->winmgr.active_window->scroll;
-
-    if (app->winmgr.active_window->highlight + 1 >= last_visible_file_idx) {
-			if (app->winmgr.active_window->highlight > files_count - active_window_height) {
-				app->winmgr.active_window->scroll = files_count - active_window_height + 1;
-			}
-			else{
-				app->winmgr.active_window->scroll += jump_number ? jump_number : 1;
-			}
-
-		}
-    return;
+		move_highlight(app->winmgr.active_window,jump_counter,true);
+		return;
 
   case KEY_UP:
   case KEY_NAVUP:
-    if (!app->winmgr.active_window->files.filenames ||
-        app->winmgr.active_window->highlight - 1 < 0) {
-      return;
-    }
-    app->winmgr.active_window->highlight -= 1;
-    // Scroll
-    if (app->winmgr.active_window->highlight + 1 <=
-        app->winmgr.active_window->scroll) {
-      app->winmgr.active_window->scroll -= 1;
-    }
-    return;
+		move_highlight(app->winmgr.active_window,jump_counter,false);
+		return;
   // CD ..
   case KEY_LEFT:
   case KEY_NAV_PARENTDIR:
@@ -917,3 +941,4 @@ int main(int argc, char **argv) {
 
   app_exit(&app, NULL);
 }
+
