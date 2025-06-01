@@ -1,6 +1,7 @@
-
 //gcc tfiles.c $(pkg-config ncursesw --libs --cflags) -lm
 #include "config.h"
+#include "enums.h"
+#include "files.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -30,7 +31,7 @@
 #define APP_NAME "tfiles"
 #define DATA_DIR ".local/share/" APP_NAME
 
-#define MALLOC_FAIL "Failed to allocate memory"
+#define MALLOC_FAIL_MSG "Failed to allocate memory"
 
 #define STATUSLINE_HEIGHT 3
 
@@ -51,22 +52,12 @@ typedef struct {
   int last_used_y;
 } Popup;
 
-typedef enum { SUCCESS = 0, ERROR = 1, EXISTS = 2 } OperationStatus;
-typedef enum { REGULAR = 0, DIRECTORY = 1 } FileType;
 
 typedef struct {
   char *editor;
   bool debug;
 } AppState;
 
-typedef struct {
-  char **filenames;
-  size_t size;
-	//CAUTION 
-	//files_count == how much files in directory, not indexed 
-	//(it`s starting from 1)
-  unsigned int files_count;
-} FilesArray;
 
 typedef struct {
   FilesArray files;
@@ -124,20 +115,6 @@ void destroy_ncurses_window(WINDOW **win) {
   *win = NULL;
 }
 
-void free_files_window(Window *window) {
-  if (window->files.filenames == NULL) {
-    return;
-  }
-
-  for (int i = 0; i < window->files.files_count; i++) {
-    free(window->files.filenames[i]);
-  }
-  free(window->files.filenames);
-
-  window->files.files_count = 0;
-  window->files.size = 0;
-  window->files.filenames = NULL;
-}
 
 void free_window(Window **window) {
   if (*window == NULL) {
@@ -146,7 +123,7 @@ void free_window(Window **window) {
   Window *window_ = *window;
   // Free stuff from window
   destroy_ncurses_window(&window_->curses_win);
-  free_files_window(*window);
+  FilesArray_free(&window_->files);
 
   free(window_);
   *window = NULL;
@@ -182,7 +159,7 @@ void app_exit(App *app, const char *reason, ...) {
 
     char *buffer = malloc(needed + 1);
     if (buffer == NULL) {
-      fprintf(stderr, "%s\n", MALLOC_FAIL);
+      fprintf(stderr, "%s\n", MALLOC_FAIL_MSG);
       exit(EXIT_FAILURE);
     }
     vsnprintf(buffer, needed + 1, reason, args_copy);
@@ -221,77 +198,6 @@ void chdir_wrap(App *app, const char *path) {
   }
 }
 
-// for qsort
-int compare_filenames(const void *a, const void *b) {
-  return strcmp(*(char **)a, *(char **)b);
-}
-
-void fill_files_window(App *app, Window *window) {
-  if (window->files.filenames != NULL) {
-    free_files_window(window);
-  }
-
-  window->files.files_count = 0;
-  window->files.size = 2;
-  window->files.filenames =
-      malloc_wrap(app, window->files.size * sizeof(char *));
-  memset(window->files.filenames, 0, window->files.size * sizeof(char *));
-
-  DIR *dirp;
-  struct dirent *entry;
-  dirp = opendir(window->pwd);
-  if (dirp == NULL) {
-    app_exit(app, "Failed to open directory");
-    return;
-  }
-
-  // Reading directory
-  while ((entry = readdir(dirp)) != NULL) {
-    // Skip if filename = "." or ".."
-    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-      continue;
-    }
-
-    // Realloc if array too small
-    if (window->files.files_count >= window->files.size) {
-      size_t old_size = window->files.size;
-      window->files.size *= 2;
-
-      char **new_filenames =
-          realloc(window->files.filenames, window->files.size * sizeof(char *));
-      if (new_filenames == NULL) {
-        app_exit(app, MALLOC_FAIL);
-      }
-      // Initialize new reallocated empty space,
-      // So it won't point to garbage
-      memset(new_filenames + old_size, 0,
-             (window->files.size - old_size) * sizeof(char *));
-
-      // Update array
-      window->files.filenames = new_filenames;
-    }
-
-    window->files.filenames[window->files.files_count] = strdup(entry->d_name);
-    if (window->files.filenames[window->files.files_count] == NULL) {
-      app_exit(app, MALLOC_FAIL);
-    }
-
-    window->files.files_count += 1;
-  }
-
-  // If after reading directory, last_index = 0
-  // Than directory is empty
-  if (window->files.files_count == 0) {
-    free_files_window(window);
-  }
-
-  // Sort filenames
-  qsort(window->files.filenames, window->files.files_count, sizeof(char *),
-        compare_filenames);
-
-  closedir(dirp);
-}
-
 void clear_window(Window *window) {
   // Clears only what inside in window (pwd, files)
   int maxY, maxX;
@@ -320,8 +226,11 @@ void chdir_window(App *app, const char *path, Window *window) {
   }
   window->highlight = 0; // Потом так не делать
   window->scroll = 0;
-  free_files_window(window);
-  fill_files_window(app, window);
+  FilesArray_free(&window->files);
+  if (FilesArray_fill(&window->files, window->pwd) > 0)
+  {
+    app_exit(app, NULL);
+  }
 	clear_window(window);
 }
 
@@ -330,7 +239,7 @@ void copy_window(App *app, Window *dest, Window *src) {
     return;
   }
   if (dest->files.filenames != NULL) {
-    free_files_window(dest);
+    FilesArray_free(&dest->files);
   }
 
   strncpy(dest->pwd, src->pwd, sizeof(src->pwd));
@@ -343,7 +252,7 @@ void copy_window(App *app, Window *dest, Window *src) {
     char *src_filename = src->files.filenames[i];
     dest->files.filenames[i] = strdup(src_filename);
     if (dest->files.filenames[i] == NULL) {
-      app_exit(app, MALLOC_FAIL);
+      app_exit(app, MALLOC_FAIL_MSG);
     }
   }
 }
@@ -485,7 +394,7 @@ void close_window(App *app) {
   update_windows_size(app);
 }
 
-OperationStatus create_dir(const char *path) {
+int create_dir(const char *path) {
   if (mkdir(path, 0700) < 0) {
     if (errno == EEXIST) {
       return EXISTS;
@@ -577,7 +486,17 @@ void init_app(App *app, int argc, char **argv) {
   Window *first_window = create_window(app, NULL);
 
   // Fill window with files
-  fill_files_window(app, first_window);
+  int fill_res = FilesArray_fill(&first_window->files, first_window->pwd); 
+  if (fill_res > 0) {
+    if (fill_res == MALLOC_FAIL){
+      app_exit(app, MALLOC_FAIL_MSG);
+    }
+    else {
+      app_exit(app, NULL);
+    }
+  }
+
+
 }
 
 // If text is bigger than window width,
