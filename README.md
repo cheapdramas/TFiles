@@ -1,5 +1,6 @@
 ## TFiles
-Terminal file manager for linux 
+Terminal file manager for linux
+`Just 'tf'`
 
 
 ## Keybindings
